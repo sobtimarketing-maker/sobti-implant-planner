@@ -24,3 +24,16 @@ Not done / to check on the tablet
 - Compressed DICOM (JPEG/JPEG2000/RLE) shows a clear "not supported yet" message.
 
 Next: Session 2: oblique MPR, full-resolution ROI reload, measurement ruler.
+
+## Session 2 (2026-11-14): oblique MPR, full-detail region, ruler
+Device test of Session 1 (Dr, clinic tablet): worked through Orientation. Fixed: Quality dropdown unreadable in navy theme, content under the Android status bar (Capacitor `adjustMarginsForEdgeToEdge: auto` + safe-area padding), header wrapping at 1280 px.
+
+Built
+- `src/render/oblique.ts`: plane sampler over several volumes (finest first), trilinear when idle, nearest + half resolution while dragging. Shared orthonormal frame (ex, ey, ez) defines the three planes; Tilt rotates the frame about the touched view's normal, and a per-view spin keeps that view's own image upright while the other lines rotate. Orientation letters follow the plane's dominant LPS axis.
+- Full detail (spec section 2 ROI): the loader worker stays alive per case and `loadRoi` crops a 40 mm cube at source resolution (0.15 mm, about 18 MB) from the zip around the cursor. Real case: 2.5–2.9 s. Views draw the region inside the working volume automatically. After reopening a case from cache the file must be opened again for this (no persistent file handle in WebView).
+- Tools: Scroll / Brightness / Tilt / Measure. Measurements stored in the case (world LPS mm), shown in views whose plane holds both ends (±0.75 mm), listed with jump-to and delete. Hidden in Patient view.
+- Case schema: `measurements`, `view.point/frame/spin` (Session 1 voxel cursor dropped on migrate).
+
+Tests: 20 unit (oblique vs axis-aligned equality, trilinear, frame drift, ROI agreement and edge clamp) + e2e on the real case (open 7.4 s, detail 2.5 s, measure, tilt, reopen).
+
+Next: Session 3: arch curve, panoramic, cross-sections, nerve tracing, tooth outlining.

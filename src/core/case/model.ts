@@ -80,7 +80,8 @@ export interface CaseRecord {
     notes: string;
   };
   study?: CaseStudy;
-  view?: { wc: number; ww: number; cursor?: Vec3 };
+  view?: { wc: number; ww: number; point?: Vec3; frame?: { ex: Vec3; ey: Vec3; ez: Vec3 }; spin?: { axial: number; coronal: number; sagittal: number } };
+  measurements: { id: string; a: Vec3; b: Vec3; view: 'axial' | 'coronal' | 'sagittal'; label?: string }[];
 }
 
 export function newId(): string {
@@ -109,6 +110,7 @@ export function newCase(): CaseRecord {
       sites: [], prosthesis: 'single-crowns', retention: 'screw', implantSystem: '',
       guideType: 'tooth-supported', surgeon: '', surgeryDate: '', notes: '',
     },
+    measurements: [],
   };
 }
 
@@ -121,6 +123,9 @@ export function migrateCase(raw: unknown): CaseRecord {
     schema: CASE_SCHEMA,
     patient: { ...fresh.patient, ...c.patient, medical: { ...fresh.patient.medical, ...(c.patient?.medical ?? {}) } },
     plan: { ...fresh.plan, ...c.plan },
+    measurements: c.measurements ?? [],
+    // Session 1 stored a voxel cursor; it is dropped (views re-centre).
+    view: c.view ? { wc: c.view.wc, ww: c.view.ww, point: c.view.point, frame: c.view.frame, spin: c.view.spin } : undefined,
   };
 }
 

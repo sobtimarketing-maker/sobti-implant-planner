@@ -158,14 +158,29 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .cell { position: relative; border-radius: 14px; overflow: hidden; background: var(--image-bg); border: 1px solid #22355A; }
 .cell.placeholder { display: flex; align-items: center; justify-content: center; color: #8FA3C4; font-size: 14px; }
 
+/* Viewer tools */
+.tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tool { min-height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--white); font-weight: 600; color: var(--muted); }
+.tool.on { background: var(--royal); border-color: var(--royal); color: var(--white); }
+.btn.slim { min-height: 44px; margin-top: 10px; font-size: 14px; }
+.row-btns { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.row-btns .btn { flex: 1; min-height: 44px; font-size: 14px; padding: 0 12px; }
+.icon-btn.small { width: 40px; height: 40px; border-radius: 10px; }
+.measure-list { display: flex; flex-direction: column; gap: 6px; }
+.measure-row { display: flex; align-items: center; gap: 6px; }
+.measure-go { flex: 1; min-height: 40px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--white); font-weight: 600; padding: 0 10px; text-align: left; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+
 /* Expert (navy) theme */
 .workspace.navy { background: var(--navy); color: #EAF0FA; }
 .workspace.navy .card { background: #13325F; border-color: #22477E; color: #EAF0FA; }
 .workspace.navy .muted, .workspace.navy .step-label, .workspace.navy .footer, .workspace.navy h3 { color: #A9BBD8; }
 .workspace.navy .step.active { background: #13325F; border-color: var(--bright-gold); }
 .workspace.navy .step.active .step-label { color: #fff; }
-.workspace.navy .icon-btn, .workspace.navy .btn.secondary, .workspace.navy .chip { background: #13325F; border-color: #22477E; color: #EAF0FA; }
+.workspace.navy .icon-btn, .workspace.navy .btn.secondary, .workspace.navy .chip, .workspace.navy .tool, .workspace.navy .measure-go { background: #13325F; border-color: #22477E; color: #EAF0FA; }
 .workspace.navy .segmented { background: #0A1F42; }
+.workspace.navy .tool.on { background: var(--royal); border-color: var(--bright-gold); color: #fff; }
+.workspace.navy .warn-line { background: #3A2C10; color: #FBE3B8; }
 .workspace.navy .segmented button { color: #C9D6EA; }
 .workspace.navy .segmented button.on { background: #22477E; color: #fff; }
 .workspace.navy .brand-name { color: #fff; }

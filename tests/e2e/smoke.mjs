@@ -45,6 +45,33 @@ try {
     await page.getByRole('button', { name: 'Show Coronal view' }).click();
     await page.waitForTimeout(300);
     await shot(page, '3-coronal.png');
+    // Full-resolution detail around the cursor.
+    const t1 = Date.now();
+    await page.getByRole('button', { name: 'Load full detail here' }).click();
+    await page.getByText(/mm detail here/).waitFor({ timeout: 60000 });
+    console.log(`Full detail box: ${((Date.now() - t1) / 1000).toFixed(1)} s`);
+    // Measure a line.
+    await page.getByRole('button', { name: 'Measure', exact: true }).click();
+    const hb = await page.locator('.hero canvas').boundingBox();
+    await page.mouse.move(hb.x + hb.width * 0.35, hb.y + hb.height * 0.5);
+    await page.mouse.down();
+    await page.mouse.move(hb.x + hb.width * 0.5, hb.y + hb.height * 0.55, { steps: 8 });
+    await page.mouse.up();
+    await page.getByRole('button', { name: /Show measurement 1/ }).waitFor();
+    // Tilt.
+    await page.getByRole('button', { name: 'Tilt', exact: true }).click();
+    await page.mouse.move(hb.x + hb.width * 0.8, hb.y + hb.height * 0.5);
+    await page.mouse.down();
+    await page.mouse.move(hb.x + hb.width * 0.8, hb.y + hb.height * 0.3, { steps: 8 });
+    await page.mouse.up();
+    await page.getByText(/°$/).waitFor();
+    // Zoom in to see the detail.
+    await page.mouse.move(hb.x + hb.width * 0.45, hb.y + hb.height * 0.5);
+    await page.keyboard.down('Control');
+    for (let i = 0; i < 12; i++) await page.mouse.wheel(0, -100);
+    await page.keyboard.up('Control');
+    await page.waitForTimeout(400);
+    await shot(page, '3b-detail-measure-tilt.png');
     await page.getByRole('button', { name: 'Expert grid' }).click();
     await page.waitForTimeout(400);
     await shot(page, '4-expert.png');

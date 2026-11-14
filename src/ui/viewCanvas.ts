@@ -1,21 +1,36 @@
-// One interactive slice view: draws a slice with window/level, crosshair,
-// orientation letters and scale bar; handles touch, stylus, mouse and wheel.
-import type { Volume } from '../core/volume/volume';
-import { extractSlice, ORIENT, pixelToVoxel, sliceCount, sliceIndex, ViewKind, voxelToPixel, WindowLut } from '../render/mpr';
+// One interactive view: an oblique plane through the cursor, drawn with
+// window/level, the other planes' lines, orientation letters, scale bar and
+// measurements. Handles touch, stylus, mouse and wheel.
+import type { Vec3, Volume } from '../core/volume/volume';
+import { ORIENT, ViewKind, WindowLut } from '../render/mpr';
+import { add, cross, Frame, len, planeFor, rotate, rotateFrame, samplePlane, scale, sub, volumeCenter } from '../render/oblique';
+import { dot } from '../core/volume/volume';
 
-export type DragMode = 'scroll' | 'window';
+export type Tool = 'scroll' | 'window' | 'tilt' | 'measure';
+
+export interface Measurement { id: string; a: Vec3; b: Vec3; view: ViewKind }
 
 export interface ViewHost {
-  volume: Volume;
-  cursor: [number, number, number];
+  base: Volume;                 // working volume (extent, step size)
+  vols(): Volume[];             // finest first
+  cursor: Vec3;                 // world LPS mm
+  frame: Frame;
+  /** In-plane rotation per view that keeps a tilted view's own image upright. */
+  spin: Record<ViewKind, number>;
   wc: number;
   ww: number;
-  dragMode: DragMode;
+  tool: Tool;
   showNumbers: boolean;
-  setCursor(c: [number, number, number]): void;
+  measurements: Measurement[];
+  setCursor(p: Vec3): void;
   setWindow(wc: number, ww: number): void;
+  setFrame(f: Frame, spin?: Record<ViewKind, number>): void;
+  addMeasurement(a: Vec3, b: Vec3, view: ViewKind): void;
+  setInteracting(on: boolean): void;
+  interacting: boolean;
 }
 
+export const VIEW_COLOR: Record<ViewKind, string> = { axial: '#FBAE49', coronal: '#5BE3A0', sagittal: '#7FB2FF' };
 const LABEL: Record<ViewKind, string> = { axial: 'Axial', coronal: 'Coronal', sagittal: 'Sagittal' };
 
 export class ViewCanvas {
@@ -25,21 +40,27 @@ export class ViewCanvas {
   private img: HTMLCanvasElement;
   private imgCtx: CanvasRenderingContext2D;
   private imageData: ImageData | null = null;
-  private sliceBuf: Int16Array | undefined;
+  private buf = new Int16Array(0);
   private lut = new WindowLut();
   private zoom = 1;
-  private pan: [number, number] = [0, 0];
+  private pan: [number, number] = [0, 0]; // mm along u, v
   private pointers = new Map<number, { x: number; y: number }>();
-  private gesture: { kind: 'none' | 'drag' | 'pinch'; startX: number; startY: number; moved: boolean; startIdx: number; wc: number; ww: number; dist: number; zoom: number; mid: [number, number]; pan: [number, number] } | null = null;
+  private gesture: null | {
+    kind: 'drag' | 'pinch'; x0: number; y0: number; moved: boolean;
+    cursor: Vec3; frame: Frame; spin: Record<ViewKind, number>; wc: number; ww: number;
+    dist: number; zoom: number; mid: [number, number]; pan: [number, number];
+    a?: Vec3; b?: Vec3;
+  } = null;
   private dirty = true;
   private ro: ResizeObserver;
-
   private compact: boolean;
+  private center: Vec3;
 
   constructor(readonly kind: ViewKind, private host: ViewHost, opts: { compact?: boolean } = {}) {
     this.compact = !!opts.compact;
+    this.center = volumeCenter(host.base);
     this.el = document.createElement('div');
-    this.el.className = 'view' + (opts.compact ? ' compact' : '');
+    this.el.className = 'view' + (this.compact ? ' compact' : '');
     this.canvas = document.createElement('canvas');
     this.canvas.setAttribute('role', 'img');
     this.canvas.setAttribute('aria-label', `${LABEL[kind]} CBCT slice`);
@@ -49,59 +70,126 @@ export class ViewCanvas {
     this.imgCtx = this.img.getContext('2d')!;
     this.ro = new ResizeObserver(() => this.invalidate());
     this.ro.observe(this.el);
-    if (!opts.compact) this.bindInput();
+    if (!this.compact) this.bindInput();
   }
 
   dispose(): void { this.ro.disconnect(); }
-
   invalidate(): void { this.dirty = true; }
-
   resetView(): void { this.zoom = 1; this.pan = [0, 0]; this.invalidate(); }
+  get plane() {
+    const p = planeFor(this.kind, this.host.frame);
+    const a = this.host.spin[this.kind];
+    return a ? { u: rotate(p.u, p.n, -a), v: rotate(p.v, p.n, -a), n: p.n } : p;
+  }
 
-  /** Draw if anything changed. Called from the host's animation frame. */
+  /** Geometry of the current plane on screen. */
+  private geom() {
+    const rect = this.el.getBoundingClientRect();
+    const cssW = Math.max(1, rect.width), cssH = Math.max(1, rect.height);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const W = Math.max(1, Math.round(cssW * dpr)), H = Math.max(1, Math.round(cssH * dpr));
+    const b = this.host.base;
+    const extent = Math.max(b.dims[0] * b.spacing[0], b.dims[1] * b.spacing[1], b.dims[2] * b.spacing[2]);
+    const mmPerCss = extent / Math.min(cssW, cssH) / this.zoom;
+    // Sample grid: device pixels, halved while interacting, capped for speed.
+    const q = this.host.interacting && !this.compact ? 0.5 : 1;
+    const cap = this.compact ? 320 : 1024;
+    const s = Math.min(q, cap / Math.max(W, H));
+    const sw = Math.max(1, Math.round(W * s)), sh = Math.max(1, Math.round(H * s));
+    const px = (cssW * mmPerCss) / sw; // mm per sample pixel
+    const pl = this.plane;
+    // Display centre: volume centre shifted by pan, moved onto the plane through the cursor.
+    const c0 = add(this.center, add(scale(pl.u, this.pan[0]), scale(pl.v, this.pan[1])));
+    const D = add(c0, scale(pl.n, dot(sub(this.host.cursor, c0), pl.n)));
+    return { W, H, dpr, sw, sh, px, pl, D, k: W / sw, mmPerCss };
+  }
+
+  private toScreen(g: ReturnType<ViewCanvas['geom']>, p: Vec3): [number, number] {
+    const d = sub(p, g.D);
+    return [(dot(d, g.pl.u) / g.px + g.sw / 2) * g.k, (dot(d, g.pl.v) / g.px + g.sh / 2) * g.k];
+  }
+
+  private toWorld(clientX: number, clientY: number): Vec3 {
+    const g = this.geom();
+    const r = this.el.getBoundingClientRect();
+    const x = ((clientX - r.left) * g.dpr) / g.k - g.sw / 2;
+    const y = ((clientY - r.top) * g.dpr) / g.k - g.sh / 2;
+    return add(g.D, add(scale(g.pl.u, x * g.px), scale(g.pl.v, y * g.px)));
+  }
+
   draw(): void {
     if (!this.dirty) return;
     this.dirty = false;
-    const v = this.host.volume;
-    const rect = this.el.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const W = Math.max(1, Math.round(rect.width * dpr));
-    const H = Math.max(1, Math.round(rect.height * dpr));
-    if (this.canvas.width !== W || this.canvas.height !== H) { this.canvas.width = W; this.canvas.height = H; }
-    const idx = sliceIndex(this.kind, this.host.cursor);
-    const s = extractSlice(v, this.kind, idx, this.sliceBuf);
-    this.sliceBuf = s.data;
-    if (!this.imageData || this.imageData.width !== s.w || this.imageData.height !== s.h) {
-      this.img.width = s.w; this.img.height = s.h;
-      this.imageData = this.imgCtx.createImageData(s.w, s.h);
+    const g = this.geom();
+    if (this.canvas.width !== g.W || this.canvas.height !== g.H) { this.canvas.width = g.W; this.canvas.height = g.H; }
+    if (this.buf.length !== g.sw * g.sh) this.buf = new Int16Array(g.sw * g.sh);
+    const origin = add(g.D, add(scale(g.pl.u, (-g.sw / 2 + 0.5) * g.px), scale(g.pl.v, (-g.sh / 2 + 0.5) * g.px)));
+    samplePlane(this.host.vols(), origin, g.pl.u, g.pl.v, g.px, g.sw, g.sh, this.buf, !this.host.interacting);
+    if (!this.imageData || this.imageData.width !== g.sw || this.imageData.height !== g.sh) {
+      this.img.width = g.sw; this.img.height = g.sh;
+      this.imageData = this.imgCtx.createImageData(g.sw, g.sh);
     }
     this.lut.set(this.host.wc, this.host.ww);
-    this.lut.apply(s.data, new Uint32Array(this.imageData.data.buffer));
+    this.lut.apply(this.buf, new Uint32Array(this.imageData.data.buffer));
     this.imgCtx.putImageData(this.imageData, 0, 0);
 
-    const ctx = this.ctx;
+    const ctx = this.ctx, dpr = g.dpr, W = g.W, H = g.H;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#050B16';
-    ctx.fillRect(0, 0, W, H);
-    const g = this.geometry(s.w, s.h, s.pxW, s.pxH, W, H);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(this.img, g.x, g.y, g.w, g.h);
+    ctx.drawImage(this.img, 0, 0, W, H);
 
-    // Crosshair
-    const [cx, cy] = voxelToPixel(v, this.kind, this.host.cursor);
-    const px = g.x + (cx + 0.5) * g.sx, py = g.y + (cy + 0.5) * g.sy;
+    // Other planes through the cursor: line direction = n × n_other.
+    const [cx, cy] = this.toScreen(g, this.host.cursor);
     ctx.lineWidth = Math.max(1, dpr);
-    ctx.strokeStyle = 'rgba(251, 174, 73, 0.75)';
-    ctx.setLineDash([6 * dpr, 6 * dpr]);
-    ctx.beginPath();
-    ctx.moveTo(g.x, py); ctx.lineTo(g.x + g.w, py);
-    ctx.moveTo(px, g.y); ctx.lineTo(px, g.y + g.h);
-    ctx.stroke();
+    ctx.setLineDash(this.compact ? [] : [6 * dpr, 6 * dpr]);
+    for (const other of ['axial', 'coronal', 'sagittal'] as ViewKind[]) {
+      if (other === this.kind) continue;
+      const dir = cross(g.pl.n, planeFor(other, this.host.frame).n);
+      const du = dot(dir, g.pl.u), dv = dot(dir, g.pl.v);
+      const l = Math.hypot(du, dv);
+      if (l < 1e-6) continue;
+      const ext = (W + H) * 2;
+      ctx.strokeStyle = VIEW_COLOR[other] + 'CC';
+      ctx.beginPath();
+      ctx.moveTo(cx - (du / l) * ext, cy - (dv / l) * ext);
+      ctx.lineTo(cx + (du / l) * ext, cy + (dv / l) * ext);
+      ctx.stroke();
+    }
     ctx.setLineDash([]);
+    if (!this.compact) {
+      ctx.strokeStyle = VIEW_COLOR[this.kind];
+      ctx.beginPath(); ctx.arc(cx, cy, 5 * dpr, 0, Math.PI * 2); ctx.stroke();
+    }
 
-    // Orientation letters
-    const [l, r, t, b] = ORIENT[this.kind];
+    // Measurements lying in this plane (both ends within 0.75 mm).
+    if (!this.compact && this.host.showNumbers) {
+      const list = [...this.host.measurements];
+      const live = this.gesture?.a && this.gesture.b ? { id: 'live', a: this.gesture.a, b: this.gesture.b, view: this.kind } : null;
+      if (live) list.push(live);
+      for (const m of list) {
+        const off = (p: Vec3) => Math.abs(dot(sub(p, g.D), g.pl.n));
+        if (off(m.a) > 0.75 || off(m.b) > 0.75) continue;
+        const [ax, ay] = this.toScreen(g, m.a), [bx, by] = this.toScreen(g, m.b);
+        ctx.strokeStyle = '#FBAE49';
+        ctx.fillStyle = '#FBAE49';
+        ctx.lineWidth = 2 * dpr;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        for (const [x, y] of [[ax, ay], [bx, by]]) { ctx.beginPath(); ctx.arc(x, y, 4 * dpr, 0, Math.PI * 2); ctx.fill(); }
+        const txt = `${len(sub(m.b, m.a)).toFixed(1)} mm`;
+        ctx.font = `600 ${13 * dpr}px Inter, system-ui, sans-serif`;
+        const tw = ctx.measureText(txt).width;
+        const mx = (ax + bx) / 2 + 8 * dpr, my = (ay + by) / 2 - 8 * dpr;
+        ctx.fillStyle = 'rgba(14,42,87,.85)';
+        ctx.fillRect(mx - 4 * dpr, my - 12 * dpr, tw + 8 * dpr, 18 * dpr);
+        ctx.fillStyle = '#FBAE49';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillText(txt, mx, my - 3 * dpr);
+      }
+    }
+
+    // Orientation letters (from the plane's dominant LPS direction).
+    const [l, r, t, b] = this.letters(g.pl.u, g.pl.v);
     ctx.fillStyle = 'rgba(234, 240, 250, 0.85)';
     ctx.font = `600 ${(this.compact ? 10 : 13) * dpr}px Inter, system-ui, sans-serif`;
     ctx.textBaseline = 'middle';
@@ -109,84 +197,54 @@ export class ViewCanvas {
     ctx.textAlign = 'right'; ctx.fillText(r, W - 10 * dpr, H / 2);
     ctx.textAlign = 'center'; ctx.fillText(t, W / 2, 14 * dpr); ctx.fillText(b, W / 2, H - 14 * dpr);
 
-    // Scale bar (10 mm)
-    const mmPx = g.sx / s.pxW;
-    const bar = 10 * mmPx;
-    if (!this.compact && bar > 20 && bar < W * 0.6) {
+    // Scale bar: 10 mm, or 5 / 1 mm when zoomed in.
+    if (!this.compact) {
+      const mmPx = (g.k / g.px);
+      const mm = 10 * mmPx < W * 0.3 ? 10 : 5 * mmPx < W * 0.3 ? 5 : 1;
+      const bar = mm * mmPx;
       const x0 = W - 16 * dpr - bar, y0 = 40 * dpr;
       ctx.strokeStyle = '#EAF0FA';
+      ctx.fillStyle = '#EAF0FA';
       ctx.lineWidth = 2 * dpr;
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + bar, y0); ctx.stroke();
       ctx.textAlign = 'center';
       ctx.font = `500 ${11 * dpr}px Inter, system-ui, sans-serif`;
-      ctx.fillText('10 mm', x0 + bar / 2, y0 + 12 * dpr);
+      ctx.fillText(`${mm} mm`, x0 + bar / 2, y0 + 12 * dpr);
     }
   }
 
-  private geometry(w: number, h: number, pxW: number, pxH: number, W: number, H: number) {
-    // Fit physical size (mm) into the canvas, then apply zoom and pan.
-    const mmW = w * pxW, mmH = h * pxH;
-    const fit = Math.min(W / mmW, H / mmH) * this.zoom;
-    const dw = mmW * fit, dh = mmH * fit;
-    const dpr = W / Math.max(1, this.el.getBoundingClientRect().width);
-    return { x: (W - dw) / 2 + this.pan[0] * dpr, y: (H - dh) / 2 + this.pan[1] * dpr, w: dw, h: dh, sx: dw / w, sy: dh / h };
+  private letters(u: Vec3, v: Vec3): [string, string, string, string] {
+    const name = (d: Vec3, positive: boolean) => {
+      const a = [Math.abs(d[0]), Math.abs(d[1]), Math.abs(d[2])];
+      const ax = a.indexOf(Math.max(...a));
+      const pos = (d[ax] > 0) === positive;
+      return ax === 0 ? (pos ? 'L' : 'R') : ax === 1 ? (pos ? 'P' : 'A') : (pos ? 'S' : 'I');
+    };
+    const base = ORIENT[this.kind];
+    void base;
+    return [name(u, false), name(u, true), name(v, false), name(v, true)];
   }
 
-  /** CSS-pixel point in the element to image pixel. */
-  private toImage(clientX: number, clientY: number): [number, number] {
-    const v = this.host.volume;
-    const rect = this.el.getBoundingClientRect();
-    const W = this.canvas.width, H = this.canvas.height;
-    const dpr = W / Math.max(1, rect.width);
-    const idx = sliceIndex(this.kind, this.host.cursor);
-    const s = { w: 0, h: 0, pxW: 0, pxH: 0 };
-    if (this.kind === 'axial') Object.assign(s, { w: v.dims[0], h: v.dims[1], pxW: v.spacing[0], pxH: v.spacing[1] });
-    else if (this.kind === 'coronal') Object.assign(s, { w: v.dims[0], h: v.dims[2], pxW: v.spacing[0], pxH: v.spacing[2] });
-    else Object.assign(s, { w: v.dims[1], h: v.dims[2], pxW: v.spacing[1], pxH: v.spacing[2] });
-    void idx;
-    const g = this.geometry(s.w, s.h, s.pxW, s.pxH, W, H);
-    const x = ((clientX - rect.left) * dpr - g.x) / g.sx;
-    const y = ((clientY - rect.top) * dpr - g.y) / g.sy;
-    return [Math.floor(x), Math.floor(y)];
-  }
-
-  private setCursorFromPoint(clientX: number, clientY: number): void {
-    const v = this.host.volume;
-    const [x, y] = this.toImage(clientX, clientY);
-    const idx = sliceIndex(this.kind, this.host.cursor);
-    const c = pixelToVoxel(v, this.kind, idx, x, y);
-    const cl = (a: number, n: number) => Math.max(0, Math.min(n - 1, a));
-    this.host.setCursor([cl(c[0], v.dims[0]), cl(c[1], v.dims[1]), cl(c[2], v.dims[2])]);
-  }
-
-  private stepSlice(delta: number): void {
-    const c = [...this.host.cursor] as [number, number, number];
-    const axis = this.kind === 'axial' ? 2 : this.kind === 'coronal' ? 1 : 0;
-    const n = sliceCount(this.host.volume, this.kind);
-    c[axis] = Math.max(0, Math.min(n - 1, c[axis] + delta));
-    this.host.setCursor(c);
+  private stepAlongNormal(mm: number): void {
+    this.host.setCursor(add(this.host.cursor, scale(this.plane.n, mm)));
   }
 
   private bindInput(): void {
     const el = this.canvas;
     el.style.touchAction = 'none';
+    const step = () => Math.min(...this.host.base.spacing);
     el.addEventListener('pointerdown', (e) => {
       el.setPointerCapture(e.pointerId);
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const common = { cursor: [...this.host.cursor] as Vec3, frame: this.host.frame, spin: { ...this.host.spin }, wc: this.host.wc, ww: this.host.ww, zoom: this.zoom, pan: [...this.pan] as [number, number] };
       if (this.pointers.size === 1) {
-        this.gesture = {
-          kind: 'drag', startX: e.clientX, startY: e.clientY, moved: false,
-          startIdx: sliceIndex(this.kind, this.host.cursor), wc: this.host.wc, ww: this.host.ww,
-          dist: 0, zoom: this.zoom, mid: [0, 0], pan: [...this.pan] as [number, number],
-        };
+        this.gesture = { kind: 'drag', x0: e.clientX, y0: e.clientY, moved: false, dist: 0, mid: [0, 0], ...common };
+        if (this.host.tool === 'measure' && this.host.showNumbers) { const p = this.toWorld(e.clientX, e.clientY); this.gesture.a = p; }
       } else if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()];
-        this.gesture = {
-          kind: 'pinch', startX: 0, startY: 0, moved: true, startIdx: 0, wc: 0, ww: 0,
-          dist: Math.hypot(a.x - b.x, a.y - b.y), zoom: this.zoom,
-          mid: [(a.x + b.x) / 2, (a.y + b.y) / 2], pan: [...this.pan] as [number, number],
-        };
+        this.gesture = { kind: 'pinch', x0: 0, y0: 0, moved: true, dist: Math.hypot(a.x - b.x, a.y - b.y), mid: [(a.x + b.x) / 2, (a.y + b.y) / 2], ...common };
       }
+      this.host.setInteracting(true);
     });
     el.addEventListener('pointermove', (e) => {
       if (!this.pointers.has(e.pointerId) || !this.gesture) return;
@@ -195,42 +253,60 @@ export class ViewCanvas {
       if (g.kind === 'pinch' && this.pointers.size >= 2) {
         const [a, b] = [...this.pointers.values()];
         const d = Math.hypot(a.x - b.x, a.y - b.y);
-        this.zoom = Math.max(0.5, Math.min(12, g.zoom * (d / Math.max(1, g.dist))));
+        this.zoom = Math.max(0.5, Math.min(40, g.zoom * (d / Math.max(1, g.dist))));
         const mid = [(a.x + b.x) / 2, (a.y + b.y) / 2];
-        this.pan = [g.pan[0] + mid[0] - g.mid[0], g.pan[1] + mid[1] - g.mid[1]];
+        const mm = this.geom().mmPerCss;
+        this.pan = [g.pan[0] - (mid[0] - g.mid[0]) * mm, g.pan[1] - (mid[1] - g.mid[1]) * mm];
         this.invalidate();
+        this.host.setCursor(this.host.cursor); // redraw
         return;
       }
       if (g.kind !== 'drag') return;
-      const dx = e.clientX - g.startX, dy = e.clientY - g.startY;
+      const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
       if (!g.moved && Math.hypot(dx, dy) < 8) return;
       g.moved = true;
-      if (this.host.dragMode === 'window') {
-        this.host.setWindow(Math.round(g.wc - dy * 6), Math.max(50, Math.round(g.ww + dx * 10)));
-      } else {
-        const n = sliceCount(this.host.volume, this.kind);
-        const rect = this.el.getBoundingClientRect();
-        const target = Math.round(g.startIdx - (dy / rect.height) * n * 1.2);
-        this.stepSlice(target - sliceIndex(this.kind, this.host.cursor));
+      switch (this.host.tool) {
+        case 'window':
+          this.host.setWindow(Math.round(g.wc - dy * 6), Math.max(50, Math.round(g.ww + dx * 10)));
+          break;
+        case 'tilt': {
+          // Rotate the other planes about this view's normal, around the cursor.
+          const r = this.el.getBoundingClientRect();
+          const gg = this.geom();
+          const [cx, cy] = this.toScreen(gg, this.host.cursor).map((v) => v / gg.dpr);
+          const a0 = Math.atan2(g.y0 - r.top - cy, g.x0 - r.left - cx);
+          const a1 = Math.atan2(e.clientY - r.top - cy, e.clientX - r.left - cx);
+          const da = a1 - a0;
+          this.host.setFrame(rotateFrame(g.frame, planeFor(this.kind, g.frame).n, da), { ...g.spin, [this.kind]: g.spin[this.kind] + da });
+          break;
+        }
+        case 'measure':
+          if (g.a) { g.b = this.toWorld(e.clientX, e.clientY); this.invalidate(); this.host.setCursor(this.host.cursor); }
+          break;
+        default: {
+          const n = this.plane.n;
+          const target = -dy * 0.25 * step() * 2;
+          const now = dot(sub(this.host.cursor, g.cursor), n);
+          this.stepAlongNormal(target - now);
+        }
       }
     });
     const end = (e: PointerEvent) => {
       const g = this.gesture;
-      if (g && g.kind === 'drag' && !g.moved && this.pointers.size === 1) this.setCursorFromPoint(e.clientX, e.clientY);
+      if (g && g.kind === 'drag') {
+        if (!g.moved && this.pointers.size === 1 && this.host.tool !== 'measure') this.host.setCursor(this.toWorld(e.clientX, e.clientY));
+        if (g.a && g.b && len(sub(g.b, g.a)) >= 0.3) this.host.addMeasurement(g.a, g.b, this.kind);
+      }
       this.pointers.delete(e.pointerId);
-      if (this.pointers.size === 0) this.gesture = null;
+      if (this.pointers.size === 0) { this.gesture = null; this.host.setInteracting(false); }
     };
     el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', (e) => { this.pointers.delete(e.pointerId); this.gesture = null; });
+    el.addEventListener('pointercancel', (e) => { this.pointers.delete(e.pointerId); this.gesture = null; this.host.setInteracting(false); });
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
-      if (e.ctrlKey) {
-        this.zoom = Math.max(0.5, Math.min(12, this.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
-        this.invalidate();
-      } else {
-        this.stepSlice(e.deltaY > 0 ? 1 : -1);
-      }
+      if (e.ctrlKey) { this.zoom = Math.max(0.5, Math.min(40, this.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1))); this.invalidate(); this.host.setCursor(this.host.cursor); }
+      else this.stepAlongNormal((e.deltaY > 0 ? 1 : -1) * step());
     }, { passive: false });
-    el.addEventListener('dblclick', () => this.resetView());
+    el.addEventListener('dblclick', () => { this.resetView(); this.host.setCursor(this.host.cursor); });
   }
 }

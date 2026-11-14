@@ -4,16 +4,21 @@
 import { isZip, listEntries, readEntry, ZipEntry } from '../core/io/zip';
 import { parseDicom, T, UNCOMPRESSED_TS } from '../core/dicom/parser';
 import { assembleSeries, readSliceHeader, readStudyMeta, Series, SliceHeader, StudyMeta } from '../core/volume/series';
-import { VolumeBuilder } from '../core/volume/builder';
+import { slicePixels, VolumeBuilder } from '../core/volume/builder';
 import { chooseFactor, Tier } from '../core/volume/budget';
-import { Volume } from '../core/volume/volume';
+import { dot, Vec3, Volume } from '../core/volume/volume';
 
 export interface LoadOptions {
   tier: Tier;
   ramGb: number;
   max3d?: number;
   onProgress?: (p: LoadProgress) => void;
+  /** Receives the open source so full-resolution regions can be read later. */
+  keep?: (src: CbctSource) => void;
 }
+
+/** An opened scan: file readers plus the sorted series. Lives in the worker. */
+export interface CbctSource { sources: Source[]; series: Series }
 
 export interface LoadProgress {
   phase: 'scan' | 'headers' | 'pixels' | 'done';
@@ -118,6 +123,7 @@ export async function loadCbct(files: File[], opts: LoadOptions): Promise<LoadRe
     if (n % 8 === 0) report({ phase: 'pixels', done: n, total, message: 'Building working volume' });
   }
   const volume = builder.finish();
+  opts.keep?.({ sources, series });
   report({ phase: 'done', done: total, total, message: 'Ready' });
   return {
     volume,
@@ -127,5 +133,56 @@ export async function loadCbct(files: File[], opts: LoadOptions): Promise<LoadRe
     warnings,
     sourceName: files.length === 1 ? files[0].name : `${files.length} files`,
     ms: performance.now() - t0,
+  };
+}
+
+/**
+ * Read a full-resolution region of interest (spec section 2): a box of
+ * sizeMm centred on a world point, cropped from the source slices on disk.
+ */
+export async function loadRoi(src: CbctSource, center: Vec3, sizeMm: Vec3, onProgress?: (p: LoadProgress) => void): Promise<Volume> {
+  const s = src.series;
+  const sp = s.spacing;
+  const d: Vec3 = [center[0] - s.origin[0], center[1] - s.origin[1], center[2] - s.origin[2]];
+  const ci = dot(d, s.rowDir) / sp[0], cj = dot(d, s.colDir) / sp[1], ck = dot(d, s.normal) / sp[2];
+  const half = (mm: number, spc: number) => Math.round(mm / spc / 2);
+  const range = (c: number, hw: number, n: number): [number, number] => {
+    let a = Math.round(c) - hw, b = Math.round(c) + hw;
+    if (a < 0) { b -= a; a = 0; }
+    if (b > n - 1) { a -= b - (n - 1); b = n - 1; }
+    return [Math.max(0, a), b];
+  };
+  const [i0, i1] = range(ci, half(sizeMm[0], sp[0]), s.cols);
+  const [j0, j1] = range(cj, half(sizeMm[1], sp[1]), s.rows);
+  const [k0, k1] = range(ck, half(sizeMm[2], sp[2]), s.slices.length);
+  const nx = i1 - i0 + 1, ny = j1 - j0 + 1, nz = k1 - k0 + 1;
+  const data = new Int16Array(nx * ny * nz);
+  for (let k = k0; k <= k1; k++) {
+    const h = s.slices[k];
+    const bytes = await src.sources[h.source].read();
+    const ds = parseDicom(bytes, { stopAtPixelData: true });
+    const px = ds.elements.get(T.PixelData);
+    if (!px || px.length < 0) throw new Error('Slice without readable pixel data.');
+    const vals = slicePixels(h, bytes.subarray(px.offset, px.offset + px.length));
+    const base = (k - k0) * nx * ny;
+    for (let j = j0; j <= j1; j++) {
+      const row = j * h.cols, out = base + (j - j0) * nx;
+      for (let i = i0; i <= i1; i++) {
+        const v = vals[row + i] * h.slope + h.intercept;
+        data[out + i - i0] = v < -32768 ? -32768 : v > 32767 ? 32767 : Math.round(v);
+      }
+    }
+    if ((k - k0) % 8 === 0) onProgress?.({ phase: 'pixels', done: k - k0, total: nz, message: 'Reading full detail' });
+  }
+  const o = s.origin;
+  const at = (a: number, b: number, c: number): Vec3 => [
+    o[0] + a * sp[0] * s.rowDir[0] + b * sp[1] * s.colDir[0] + c * sp[2] * s.normal[0],
+    o[1] + a * sp[0] * s.rowDir[1] + b * sp[1] * s.colDir[1] + c * sp[2] * s.normal[1],
+    o[2] + a * sp[0] * s.rowDir[2] + b * sp[1] * s.colDir[2] + c * sp[2] * s.normal[2],
+  ];
+  return {
+    dims: [nx, ny, nz], spacing: [...sp] as Vec3, origin: at(i0, j0, k0),
+    rowDir: s.rowDir, colDir: s.colDir, normal: s.normal, factor: 1,
+    sourceDims: [s.cols, s.rows, s.slices.length], sourceSpacing: sp, data,
   };
 }

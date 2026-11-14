@@ -33,26 +33,7 @@ export class VolumeBuilder {
     const f = this.f, nx = this.nx;
     const acc = this.acc, cnt = this.cnt, colIdx = this.colIdx;
     const slope = h.slope, icpt = h.intercept;
-    const bytesPer = h.bitsAllocated >> 3;
-    if (pixels.length < n * bytesPer) throw new Error('Pixel data shorter than expected');
-    let src: ArrayLike<number>;
-    if (bytesPer === 2) {
-      const aligned = (pixels.byteOffset & 1) === 0 ? pixels : pixels.slice();
-      const swap = !h.littleEndian;
-      if (swap) {
-        const tmp = new Uint8Array(n * 2);
-        for (let i = 0; i < n * 2; i += 2) { tmp[i] = aligned[i + 1]; tmp[i + 1] = aligned[i]; }
-        src = h.pixelRepresentation ? new Int16Array(tmp.buffer) : new Uint16Array(tmp.buffer);
-      } else {
-        src = h.pixelRepresentation
-          ? new Int16Array(aligned.buffer, aligned.byteOffset, n)
-          : new Uint16Array(aligned.buffer, aligned.byteOffset, n);
-      }
-    } else if (bytesPer === 1) {
-      src = h.pixelRepresentation ? new Int8Array(pixels.buffer, pixels.byteOffset, n) : pixels;
-    } else {
-      throw new Error(`BitsAllocated ${h.bitsAllocated} not supported`);
-    }
+    const src = slicePixels(h, pixels);
     for (let y = 0; y < rows; y++) {
       const rowOut = ((y / f) | 0) * nx;
       const rowIn = y * cols;
@@ -101,4 +82,24 @@ export class VolumeBuilder {
       data: this.data,
     };
   }
+}
+
+/** Typed view of one slice's stored values (before rescale). */
+export function slicePixels(h: SliceHeader, pixels: Uint8Array): ArrayLike<number> {
+  const n = h.rows * h.cols;
+  const bytesPer = h.bitsAllocated >> 3;
+  if (pixels.length < n * bytesPer) throw new Error('Pixel data shorter than expected');
+  if (bytesPer === 2) {
+    const aligned = (pixels.byteOffset & 1) === 0 ? pixels : pixels.slice();
+    if (!h.littleEndian) {
+      const tmp = new Uint8Array(n * 2);
+      for (let i = 0; i < n * 2; i += 2) { tmp[i] = aligned[i + 1]; tmp[i + 1] = aligned[i]; }
+      return h.pixelRepresentation ? new Int16Array(tmp.buffer) : new Uint16Array(tmp.buffer);
+    }
+    return h.pixelRepresentation
+      ? new Int16Array(aligned.buffer, aligned.byteOffset, n)
+      : new Uint16Array(aligned.buffer, aligned.byteOffset, n);
+  }
+  if (bytesPer === 1) return h.pixelRepresentation ? new Int8Array(pixels.buffer, pixels.byteOffset, n) : pixels;
+  throw new Error(`BitsAllocated ${h.bitsAllocated} not supported`);
 }
