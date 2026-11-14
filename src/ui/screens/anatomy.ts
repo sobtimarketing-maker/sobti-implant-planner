@@ -11,6 +11,8 @@ import { contains, samplePlane, sampleWorld, volumeCenter } from '../../render/o
 import { archGeometry, crossSectionPlane, nearestSampler, PanoGeom, renderPano, worldToPano } from '../../render/pano';
 import { h, icon } from '../dom';
 import { ImageCanvas, ImageSource } from '../imageCanvas';
+import { View3D } from '../view3d';
+import { sceneSurfaces } from '../scene3d';
 import type { RoiControl } from './viewer';
 import { suggestArch } from '../../core/anatomy/arch';
 
@@ -225,7 +227,18 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
   }
 
   // ---------- views
-  const views: ImageCanvas[] = [];
+  const views: { draw(): void; dispose(): void; invalidate(): void }[] = [];
+  const views3d: View3D[] = [];
+  let show3d = false;
+  const cursor3d = (): Vec3 | null => geom ? [...crossSectionPlane(geom, posIdx).center.slice(0, 2), posZ] as Vec3 : null;
+  const make3d = (o: { compact?: boolean; onDoubleTap?: () => void }) => {
+    const x = new View3D({
+      base: v, cursor: cursor3d, surfaces: () => sceneSurfaces(c, cursor3d()),
+      setCursor: (p) => { if (!geom) return; const q = worldToPano(geom, p); posIdx = clampIdx(q.x); posZ = p[2]; refreshCross(); },
+    }, o);
+    views.push(x); views3d.push(x);
+    return x;
+  };
   let heroArea = h('div', { class: 'hero' });
   const thumbRow = h('div', { class: 'thumbs' });
   const slider = h('input', { type: 'range', step: 'any', 'aria-label': 'Position' }) as HTMLInputElement;
@@ -237,7 +250,8 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
 
   function mount() {
     views.forEach((x) => x.dispose());
-    views.length = 0; thumbsCs.length = 0;
+    views.length = 0; thumbsCs.length = 0; views3d.length = 0;
+    heroArea.classList.remove('is3d');
     axialView = panoView = crossView = null;
     if (mode === 'arch') {
       axialImg = axialImage();
@@ -290,7 +304,11 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
       const split = h('div', { class: 'split' + (bigOne ? ` only-${bigOne}` : '') },
           h('div', { class: 'split-a' }, panoView.el, h('span', { class: 'badge' }, 'Panoramic: tap to go there')),
           h('div', { class: 'split-b' }, crossView.el, h('span', { class: 'badge' }, mode === 'nerve' ? 'Cross-section: tap the canal' : 'Cross-section: tap inside a tooth')));
-      heroArea.replaceChildren(split,
+      if (show3d) {
+        const v3 = make3d({ onDoubleTap: () => { show3d = false; mount(); } });
+        heroArea.classList.add('is3d');
+        heroArea.replaceChildren(v3.el, h('span', { class: 'badge' }, '3D: tap a spot to go there'));
+      } else heroArea.replaceChildren(split,
         h('div', { class: 'hero-slider' }, h('span', null, 'Along the arch'), slider, sliderLabel));
       slider.min = '0'; slider.max = String(geom!.w - 1); slider.value = String(posIdx);
       slider.oninput = () => { posIdx = clampIdx(+slider.value); refreshCross(); };
@@ -308,6 +326,9 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
         thumbsCs.push({ view: tv, off });
         thumbs.push(h('button', { class: 'thumb', 'aria-label': `Move ${off} mm along the arch`, onclick: () => { posIdx = clampIdx(posIdx + off / geom!.px); refreshCross(); } }, tv.el, h('span', { class: 'badge small' }, `${off > 0 ? '+' : ''}${off} mm`)));
       }
+      const t3 = make3d({ compact: true });
+      thumbs.push(h('button', { class: `thumb${show3d ? ' active' : ''}`, 'aria-label': show3d ? 'Back to panoramic and cross-section' : 'Show 3D view', onclick: () => { show3d = !show3d; mount(); } }, t3.el, h('span', { class: 'badge small' }, show3d ? 'Back to panoramic' : '3D')));
+      thumbRow.className = 'thumbs four';
       thumbRow.replaceChildren(...thumbs);
       updateSliderLabel();
     }
@@ -331,7 +352,7 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
   function updateSliderLabel() { if (geom && mode !== 'arch') sliderLabel.textContent = `${(posIdx * geom.px).toFixed(1)} / ${geom.curve.length.toFixed(0)} mm`; }
 
   let raf = 0;
-  function schedule() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; views.forEach((x) => x.draw()); }); }
+  function schedule() { views3d.forEach((x) => x.invalidate()); if (!raf) raf = requestAnimationFrame(() => { raf = 0; views.forEach((x) => x.draw()); }); }
   function refreshAxial() {
     axialImg = axialImage();
     axialView?.setImage(axialImg);
@@ -497,7 +518,7 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
       ...body.filter(Boolean) as HTMLElement[],
       message ? h('div', { class: message.includes('below') || message.includes('touch') || message.startsWith('No jaw') ? 'warn-line' : 'ok-line small' }, message) : h('span'),
       h('h3', null, 'Brightness'),
-      h('div', { class: 'chips' }, [{ label: 'Auto', ...autoWindow(v) }, ...WINDOW_PRESETS.slice(0, 2)].map((p) => h('button', { class: 'chip', onclick: () => { win.wc = p.wc; win.ww = p.ww; views.forEach((x) => x.invalidateContent()); schedule(); } }, p.label))),
+      h('div', { class: 'chips' }, [{ label: 'Auto', ...autoWindow(v) }, ...WINDOW_PRESETS.slice(0, 2)].map((p) => h('button', { class: 'chip', onclick: () => { win.wc = p.wc; win.ww = p.ww; views.forEach((x) => (x as ImageCanvas).invalidateContent?.() ?? x.invalidate()); schedule(); } }, p.label))),
     );
   }
   function roiButtons(): HTMLElement {

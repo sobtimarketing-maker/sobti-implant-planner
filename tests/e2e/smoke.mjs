@@ -18,7 +18,7 @@ const shots = process.env.SHOTS;
 if (shots) await mkdir(shots, { recursive: true });
 const shot = async (page, name) => { if (shots) await page.screenshot({ path: join(shots, name) }); };
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ args: ['--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--ignore-gpu-blocklist'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: Number(process.env.DPR ?? 1) });
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
@@ -45,6 +45,36 @@ try {
     await page.getByRole('button', { name: 'Show Coronal view' }).click();
     await page.waitForTimeout(300);
     await shot(page, '3-coronal.png');
+    // 3D view: open it big, try the looks, turn it, tap to place the point.
+    const t3 = Date.now();
+    await page.getByRole('button', { name: 'Show 3D view' }).click();
+    await page.locator('.hero.is3d canvas').waitFor();
+    await page.waitForTimeout(800);
+    console.log(`3D first picture: ${((Date.now() - t3) / 1000).toFixed(1)} s`);
+    await shot(page, '3c-3d-bone.png');
+    const b3 = await page.locator('.hero.is3d canvas').boundingBox();
+    await page.mouse.move(b3.x + b3.width * 0.5, b3.y + b3.height * 0.4);
+    await page.mouse.down();
+    await page.mouse.move(b3.x + b3.width * 0.62, b3.y + b3.height * 0.35, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+    await shot(page, '3d-3d-turned.png');
+    await page.getByRole('group', { name: '3D look' }).getByRole('button', { name: 'Teeth' }).click();
+    await page.getByRole('group', { name: '3D look' }).getByRole('button', { name: 'Hide above point' }).click();
+    await page.getByRole('group', { name: '3D direction' }).getByRole('button', { name: 'Top' }).click();
+    await page.waitForTimeout(600);
+    await shot(page, '3e-3d-teeth-top.png');
+    await page.getByRole('group', { name: '3D look' }).getByRole('button', { name: 'Skin' }).click();
+    await page.getByRole('group', { name: '3D look' }).getByRole('button', { name: 'All', exact: true }).click();
+    await page.getByRole('group', { name: '3D direction' }).getByRole('button', { name: 'Front' }).click();
+    await page.waitForTimeout(600);
+    await shot(page, '3f-3d-skin.png');
+    await page.getByRole('group', { name: '3D look' }).getByRole('button', { name: 'Bone' }).click();
+    const before = await page.locator('.readout').textContent();
+    await page.mouse.click(b3.x + b3.width * 0.5, b3.y + b3.height * 0.55);
+    await page.waitForTimeout(500);
+    if ((await page.locator('.readout').textContent()) === before) throw new Error('tap in 3D did not move the point');
+    await page.getByRole('button', { name: 'Show Coronal view' }).click();
     // Full-resolution detail around the cursor.
     const t1 = Date.now();
     await page.getByRole('button', { name: 'Load full detail here' }).click();
@@ -118,6 +148,19 @@ try {
     const csBig = await page.locator('.split-b canvas').boundingBox();
     await page.mouse.dblclick(csBig.x + csBig.width / 2, csBig.y + csBig.height / 2);
     await page.locator('.split:not(.only-a):not(.only-b)').waitFor();
+    // 3D with the outlined tooth and the nerve; tap in 3D moves the cross-section.
+    await page.getByRole('button', { name: 'Show 3D view' }).click();
+    await page.locator('.hero.is3d canvas').waitFor();
+    await page.getByRole('group', { name: '3D look' }).getByRole('button', { name: 'Teeth' }).click();
+    await page.waitForTimeout(800);
+    await shot(page, '9-3d-tooth-nerve.png');
+    await page.getByRole('group', { name: '3D look' }).getByRole('button', { name: 'Outlines only' }).click();
+    await page.getByRole('group', { name: '3D direction' }).getByRole('button', { name: 'Top' }).click();
+    await page.waitForTimeout(600);
+    await shot(page, '9b-3d-outlines.png');
+    await page.getByRole('group', { name: '3D look' }).getByRole('button', { name: 'Bone' }).click();
+    await page.getByRole('button', { name: 'Back to panoramic and cross-section' }).click();
+    await page.locator('.split-a canvas').waitFor();
     console.log('Teeth message:', await page.locator('.side-card .ok-line, .side-card .warn-line').first().textContent().catch(() => 'none'));
     // Reopen from the case list: volume should come back from the cache.
     await page.getByRole('button', { name: 'Back to cases' }).click();

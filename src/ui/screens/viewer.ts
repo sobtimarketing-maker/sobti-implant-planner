@@ -7,6 +7,8 @@ import { autoWindow, ViewKind, WINDOW_PRESETS } from '../../render/mpr';
 import { contains, Frame, IDENTITY, len, planeFor, sampleWorld, sub, tiltDeg, volumeCenter } from '../../render/oblique';
 import { h, icon } from '../dom';
 import { Tool, VIEW_COLOR, ViewCanvas, ViewHost } from '../viewCanvas';
+import { View3D } from '../view3d';
+import { sceneSurfaces } from '../scene3d';
 
 const KINDS: ViewKind[] = ['axial', 'coronal', 'sagittal'];
 const NAMES: Record<ViewKind, string> = { axial: 'Axial', coronal: 'Coronal', sagittal: 'Sagittal' };
@@ -48,7 +50,19 @@ export function renderViewer(s: AppState, c: CaseRecord, onChange: () => void, e
   };
   const views = new Map<ViewKind, ViewCanvas>();
   const thumbs = new Map<ViewKind, ViewCanvas>();
-  const all = () => [...views.values(), ...thumbs.values()];
+  const v3s = new Set<View3D>();
+  const all = (): { invalidate(): void; draw(): void; dispose(): void }[] => [...views.values(), ...thumbs.values(), ...v3s];
+  const make3d = (o: { compact?: boolean; onDoubleTap?: () => void } = {}) => {
+    const x = new View3D({
+      base: v, cursor: () => host.cursor, setCursor: (p) => host.setCursor(p),
+      surfaces: () => sceneSurfaces(c, host.cursor), interacting: () => host.interacting,
+    }, o);
+    v3s.add(x);
+    return x;
+  };
+  let hero3d = false;
+  let heroV3: View3D | null = null;
+  let thumb3d: View3D | null = null;
 
   let saveTimer = 0;
   const changed = () => {
@@ -97,7 +111,7 @@ export function renderViewer(s: AppState, c: CaseRecord, onChange: () => void, e
       ...c.measurements.map((m, i) => h('div', { class: 'measure-row' },
         h('button', {
           class: 'measure-go', 'aria-label': `Show measurement ${i + 1}`,
-          onclick: () => { host.cursor = [(m.a[0] + m.b[0]) / 2, (m.a[1] + m.b[1]) / 2, (m.a[2] + m.b[2]) / 2]; hero = m.view; mountHero?.(); changed(); },
+          onclick: () => { host.cursor = [(m.a[0] + m.b[0]) / 2, (m.a[1] + m.b[1]) / 2, (m.a[2] + m.b[2]) / 2]; hero = m.view; hero3d = false; mountHero?.(); changed(); },
         }, h('span', { class: 'dot', style: `background:${VIEW_COLOR[m.view]}` }), `${len(sub(m.b, m.a)).toFixed(1)} mm`, h('span', { class: 'muted small' }, ` ${NAMES[m.view]}`)),
         h('button', { class: 'icon-btn small', 'aria-label': `Delete measurement ${i + 1}`, onclick: () => { c.measurements.splice(i, 1); changed(); drawMeasureList(); } }, icon('trash', 16)),
       )),
@@ -173,32 +187,47 @@ export function renderViewer(s: AppState, c: CaseRecord, onChange: () => void, e
     mountHero = () => {
       views.forEach((vc) => vc.dispose());
       views.clear();
-      const vc = new ViewCanvas(hero, host);
-      views.set(hero, vc);
-      heroBadge.textContent = NAMES[hero];
-      heroBadge.style.borderLeft = `4px solid ${VIEW_COLOR[hero]}`;
-      heroWrap.replaceChildren(vc.el, heroBadge,
-        h('div', { class: 'hero-slider' }, h('span', null, 'Slide through'), slider, sliderLabel));
+      if (heroV3) { heroV3.dispose(); v3s.delete(heroV3); heroV3 = null; }
+      heroWrap.classList.toggle('is3d', hero3d);
+      if (hero3d) {
+        heroV3 = make3d();
+        heroBadge.textContent = '3D';
+        heroBadge.style.borderLeft = '4px solid #D5BC7C';
+        heroWrap.replaceChildren(heroV3.el, heroBadge);
+      } else {
+        const vc = new ViewCanvas(hero, host);
+        views.set(hero, vc);
+        heroBadge.textContent = NAMES[hero];
+        heroBadge.style.borderLeft = `4px solid ${VIEW_COLOR[hero]}`;
+        heroWrap.replaceChildren(vc.el, heroBadge,
+          h('div', { class: 'hero-slider' }, h('span', null, 'Slide through'), slider, sliderLabel));
+      }
+      thumb3d ??= make3d({ compact: true });
+      thumbRow.className = 'thumbs four';
       thumbRow.replaceChildren(...KINDS.map((k) => {
         let t = thumbs.get(k);
         if (!t) { t = new ViewCanvas(k, host, { compact: true }); thumbs.set(k, t); }
         return h('button', {
-          class: `thumb${k === hero ? ' active' : ''}`, 'aria-label': `Show ${NAMES[k]} view`,
-          onclick: () => { hero = k; mountHero!(); changed(); },
+          class: `thumb${k === hero && !hero3d ? ' active' : ''}`, 'aria-label': `Show ${NAMES[k]} view`,
+          onclick: () => { hero = k; hero3d = false; mountHero!(); changed(); },
         }, t.el, h('span', { class: 'badge small', style: `border-left:3px solid ${VIEW_COLOR[k]}` }, NAMES[k]));
-      }));
+      }), h('button', {
+        class: `thumb${hero3d ? ' active' : ''}`, 'aria-label': 'Show 3D view',
+        onclick: () => { hero3d = true; mountHero!(); changed(); },
+      }, thumb3d.el, h('span', { class: 'badge small', style: 'border-left:3px solid #D5BC7C' }, '3D')));
     };
     mountHero();
     el = h('div', { class: 'viewer guided' }, h('div', { class: 'viewer-main' }, heroWrap, thumbRow), panel);
   } else {
     const grid = h('div', { class: 'grid4' });
     // Double tap a view to fill the grid with it; double tap again to go back.
-    const cells = new Map<ViewKind, HTMLElement>();
-    const toggleFocus = (k: ViewKind) => {
+    const cells = new Map<ViewKind | '3d', HTMLElement>();
+    let grid3d: View3D | null = null;
+    const toggleFocus = (k: ViewKind | '3d') => {
       const on = !cells.get(k)!.classList.contains('focused');
       cells.forEach((c, kk) => c.classList.toggle('focused', on && kk === k));
       grid.classList.toggle('focus', on);
-      views.get(k)!.resetView();
+      if (k === '3d') grid3d?.resetView(); else views.get(k)!.resetView();
       all().forEach((x) => x.invalidate());
       schedule();
     };
@@ -209,7 +238,10 @@ export function renderViewer(s: AppState, c: CaseRecord, onChange: () => void, e
       cells.set(k, cell);
       grid.append(cell);
     }
-    grid.append(h('div', { class: 'cell placeholder' }, h('span', null, '3D view arrives in Session 4')));
+    grid3d = make3d({ onDoubleTap: () => toggleFocus('3d') });
+    const cell3d = h('div', { class: 'cell' }, grid3d.el, h('span', { class: 'badge', style: 'border-left:4px solid #D5BC7C' }, '3D'));
+    cells.set('3d', cell3d);
+    grid.append(cell3d);
     el = h('div', { class: 'viewer expert' }, grid, panel);
   }
   drawMeasureList();

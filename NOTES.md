@@ -63,3 +63,21 @@ Dr's request from the tablet: double-tap a view to bring it into the big viewer.
 - Expert grid: double-tap a view to fill the grid with it, double-tap again to go back to four.
 - Step 3: double-tap the panoramic or cross-section to fill the big area with it; again to show both. The cross-section holds a single tap back 300 ms (`deferTap`) so a double tap never adds a nerve point or outlines a tooth.
 - A view whose slice has no scan data (for example the sagittal when the point is outside the round scan area) now says "Outside the scan" instead of staying black.
+
+## Session 4 (2026-11-14): 3D view, whole-tooth outlines
+Dr's feedback on Session 3: tooth outlining should be optional and needs to be better.
+
+3D (`src/render/vr/`, `src/ui/view3d.ts`, `src/ui/scene3d.ts`)
+- Own WebGL2 engine, one context for the app on a hidden canvas; each 3D view renders there and copies the picture to its own 2D canvas, so the volume goes to the GPU once (8-bit 3D texture, 16 HU per step, about 40 MB for the test case; uploaded in slabs).
+- Pass 1: surfaces (teeth from surface nets, nerve tubes, point marker) into a framebuffer with a depth texture. Pass 2: ray march per pixel, front-to-back, early stop at 97%, stops at the surface depth, empty 8³ blocks skipped (block max grown by one block), gradient shading when still. While turning: half resolution, bigger steps, no shading; sharpens 180 ms after release.
+- Looks: Bone, Teeth, Skin (`presets.ts` control points), plus "Outlines only" (surfaces without the scan). Cuts relative to the point: hide above, hide below, cut front. Directions: Front, Right, Left, Top, Below, Centre on point.
+- Touch: drag turns, pinch zooms, two fingers move, tap puts the point on the first visible spot (CPU ray through the working volume with the same look), double tap resets (or enlarges in the expert grid). Small views fold the options into "3D options".
+- Where: Orientation (fourth thumbnail, can be the big view), Expert grid (fourth cell, replaces the placeholder), Arch and nerve (fourth thumbnail; big 3D shows teeth and nerves, tap moves the cross-section there).
+- WebGL context loss is handled (re-uploads on the next render). Tests: maths, cut planes, tables, meshes; e2e takes 3D screenshots in headless Chromium (SwiftShader).
+
+Tooth outline (`core/segment/toothGrow.ts`)
+- Tested threshold-following of roots on the clinic scan: root dentin and bone are too close in density (it stops at the neck or runs into bone). Now: crown by 3D grow on a lightly smoothed box, on an eroded mask (0.3 mm) grown back, limited to 6.5 mm around the tap, each slice filled to its convex outline. Root: tapered from the neck outline to the root tip; tip defaults to a typical root length by tooth type (upper roots up, lower down, from the FDI number); "Set root tip" lets the user tap the real tip. Masks are cropped before saving.
+- Marked optional in the panel; the tooth picker suggests the neighbours of the planned sites in turn. Warning when the crown reaches the size limit (may touch the next tooth).
+- Limit: multi-rooted molars get one tapered root (good enough for distance checks and 3D, not anatomically exact).
+
+Next: Session 5: import the intraoral scans (OBJ/STL) and merge them with the CBCT by landmark points.
