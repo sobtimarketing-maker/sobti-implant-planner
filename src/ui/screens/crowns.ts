@@ -118,6 +118,10 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     const span = newSpan(newId(), mesial, distal, fdis, occl, archCentre);
     if (Math.sqrt(dist2(mesial, distal)) < 3) { message = 'The two points are too close. Tap the contact point on each neighbouring tooth.'; return; }
     fit(span, true);
+    // Say so when planned teeth in this quadrant were left out (the gap was shorter than they need).
+    const quad = Math.floor(fdis[0] / 10), placed = new Set([...pr.spans.flatMap((x) => x.units.map((u) => u.fdi)), ...fdis]);
+    const left = c.plan.sites.map((x) => x.fdi).filter((f) => Math.floor(f / 10) === quad && !placed.has(f)).sort((a, b) => a - b);
+    if (left.length) message += ` ${left.join(' and ')} ${left.length > 1 ? 'are' : 'is'} also planned but did not fit between these points: add ${left.length > 1 ? 'them' : 'it'} with "Teeth in the gap", or tap a wider gap.`;
     pr.spans.push(span);
     sel = { span: span.id, unit: 0 };
     pick = 'idle';
@@ -299,7 +303,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
       showBite ? h('p', { class: 'muted small' }, 'Red: touching the opposing teeth. Yellow to green: close (up to 1 mm). Ivory: clear.') : null);
     if (doctor && sp) body.push(h('p', { class: 'muted small' }, `Long axis ${sp.o.map((x) => x.toFixed(2)).join(', ')} · ${isUpper(sp.units[0].fdi) ? 'upper' : 'lower'} jaw`));
     panel.replaceChildren(h('h2', null, 'Crowns'), ...(body.filter(Boolean) as HTMLElement[]),
-      message ? h('div', { class: /not|too close|did not|Add the/i.test(message) ? 'warn-line' : 'ok-line small' }, message) : h('span'));
+      message ? h('div', { class: /not fit|too close|did not|Add the/i.test(message) ? 'warn-line' : 'ok-line small' }, message) : h('span'));
   }
 
   const el = h('div', { class: 'viewer guided' }, h('div', { class: 'viewer-main' }, heroArea), panel);
