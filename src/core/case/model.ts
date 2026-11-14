@@ -113,6 +113,8 @@ export interface CaseScans {
   residuals?: number[];
   surfaceRms?: number;
   method?: 'points' | 'points+surface' | 'adjusted';
+  /** Teeth taken out of a scan (virtual extraction): tap point in scan mm and how wide. The untouched scan is kept as '<arch>:orig'. */
+  extracted?: { id: string; arch: 'upper' | 'lower'; seed: Vec3; radius: number }[];
 }
 
 export function newId(): string {

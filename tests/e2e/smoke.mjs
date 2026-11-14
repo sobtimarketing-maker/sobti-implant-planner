@@ -205,9 +205,10 @@ try {
       await shot(page, '14-crowns-pick.png');
       const cb = await page.locator('.hero canvas').first().boundingBox();
       const CONTACTS = JSON.parse(process.env.CONTACTS || '[[0.3,0.5],[0.2,0.5]]');
+      const tc = Date.now();
       for (const [x, y] of CONTACTS) { await page.mouse.click(cb.x + cb.width * x, cb.y + cb.height * y); await page.waitForTimeout(600); }
       await page.locator('.side-card').getByText(/placed|too close/).waitFor({ timeout: 30000 });
-      console.log('Crown:', await page.locator('.side-card .ok-line, .side-card .warn-line').last().textContent());
+      console.log('Crown placed in', ((Date.now() - tc) / 1000).toFixed(1), 's:', await page.locator('.side-card .ok-line, .side-card .warn-line').last().textContent());
       await page.waitForTimeout(1200);
       await shot(page, '15-crown-cheek.png');
       await page.getByRole('group', { name: 'Look from' }).getByRole('button', { name: 'Bite' }).click();
@@ -218,6 +219,22 @@ try {
       await page.getByRole('group', { name: 'Look from' }).getByRole('button', { name: 'Tongue' }).click();
       await page.waitForTimeout(1200);
       await shot(page, '17-crown-tongue.png');
+      // Virtual extraction of the premolar in front of the gap.
+      await page.getByRole('button', { name: 'Take a tooth out of the scan' }).click();
+      await page.waitForTimeout(1200);
+      const eb = await page.locator('.hero canvas').first().boundingBox();
+      await page.mouse.click(eb.x + eb.width * 0.343, eb.y + eb.height * 0.626);
+      await page.getByRole('button', { name: 'Take this tooth out' }).waitFor({ timeout: 20000 });
+      await page.waitForTimeout(800);
+      await shot(page, '18-extract-preview.png');
+      const t7 = Date.now();
+      await page.getByRole('button', { name: 'Take this tooth out' }).click();
+      await page.locator('.side-card').getByText(/Tooth taken out|Could not/).waitFor({ timeout: 60000 });
+      console.log(`Extraction: ${((Date.now() - t7) / 1000).toFixed(1)} s:`, await page.locator('.side-card .ok-line, .side-card .warn-line').last().textContent());
+      await page.getByRole('button', { name: 'Take a tooth out of the scan' }).click();
+      await page.waitForTimeout(1200);
+      await shot(page, '19-extracted.png');
+      await page.getByRole('button', { name: 'Cancel' }).click();
     }
     // Reopen from the case list: volume should come back from the cache.
     await page.getByRole('button', { name: 'Back to cases' }).click();

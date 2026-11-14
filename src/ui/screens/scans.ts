@@ -70,6 +70,8 @@ export function renderScans(s: AppState, c: CaseRecord, onChange: () => void, ro
       const stored: StoredScan = { full: m.full, display: m.display ?? m.full };
       sc[arch] = { name: f.name, vertices: stored.full.positions.length / 3, faces: stored.full.indices.length / 3 };
       if (arch === sc.treating) { sc.m = undefined; sc.residuals = undefined; sc.surfaceRms = undefined; }
+      sc.extracted = sc.extracted?.filter((e) => e.arch !== arch);
+      putScan(c.id, `${arch}:orig`, null).catch(() => undefined);
       setScanMesh(c.id, arch, stored);
       busy = 'Saving…'; updatePanel();
       try { await putScan(c.id, arch, stored); } catch { message = 'The scan could not be saved on this device (storage full?). It is shown for now.'; }
@@ -82,6 +84,8 @@ export function renderScans(s: AppState, c: CaseRecord, onChange: () => void, ro
   }
   async function removeScan(arch: Arch) {
     sc[arch] = undefined;
+    sc.extracted = sc.extracted?.filter((e) => e.arch !== arch);
+    await putScan(c.id, `${arch}:orig`, null).catch(() => undefined);
     if (arch === sc.treating) { sc.m = undefined; sc.pairs = []; sc.residuals = undefined; sc.surfaceRms = undefined; }
     setScanMesh(c.id, arch, null);
     await putScan(c.id, arch, null).catch(() => undefined);
@@ -285,7 +289,7 @@ export function renderScans(s: AppState, c: CaseRecord, onChange: () => void, ro
         const out: SceneSurface[] = [];
         for (const [arch, ms] of meshes) {
           if (arch === sc.treating && colourMap) { const cm = colouredTreating(); if (cm) { out.push({ key: `scanmap:${colourKey}`, color: [1, 1, 1], mesh: () => cm, model: sc.m, vertexColors: true }); continue; } }
-          out.push({ key: `scan:${c.id}:${arch}`, color: arch === sc.treating ? [0.93, 0.62, 0.78] : [0.62, 0.8, 0.95], mesh: () => ms.display, model: sc.m });
+          out.push({ key: `scan:${c.id}:${arch}:${ms.display.indices.length}`, color: arch === sc.treating ? [0.93, 0.62, 0.78] : [0.62, 0.8, 0.95], mesh: () => ms.display, model: sc.m });
         }
         return [...out, ...pairSurfaces('ct'), { key: 'sphere', color: [0.98, 0.82, 0.3], mesh: () => sphere, at: [...checkPt, 0.9] as [number, number, number, number] }];
       };

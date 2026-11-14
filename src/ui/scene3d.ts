@@ -31,7 +31,7 @@ export function sceneSurfaces(c: CaseRecord, cursor: Vec3 | null): SceneSurface[
   if (c.scans?.m) {
     const ms = scanMeshes(c.id);
     for (const [arch, sc] of ms) {
-      out.push({ key: `scan:${c.id}:${arch}`, color: arch === c.scans.treating ? [0.93, 0.62, 0.78] : [0.62, 0.8, 0.95], mesh: () => sc.display, model: c.scans.m });
+      out.push({ key: `scan:${c.id}:${arch}:${sc.display.indices.length}`, color: arch === c.scans.treating ? [0.93, 0.62, 0.78] : [0.62, 0.8, 0.95], mesh: () => sc.display, model: c.scans.m });
     }
   }
   if (cursor) out.push({ key: 'sphere', color: [0.98, 0.82, 0.3], mesh: memo('sphere', () => sphereMesh()), at: [...cursor, 1.2] as [number, number, number, number] });

@@ -112,3 +112,10 @@ Built (step 5 "Design crowns", `src/ui/screens/crowns.ts`; core in `src/core/cro
 - Real case: 46-47 bridge placed on the right lower ridge, meets the upper teeth with point contacts.
 
 Next (Session 7): implants under the crowns, with nerve and neighbour distance checks.
+
+### Session 6b: virtual extraction, faster bite check
+- "Take a tooth out of the scan" (Design crowns step, `core/mesh/extract.ts`): tap a tooth; vertices are grown across the scan from the tap, kept where they lie on the CBCT tooth surface (within 1.2 mm of iso-800 voxels next to ≥1500 HU) and within the chosen area (Smaller/Larger, default 11 mm across). Preview in red. Cut-out hole rims are chained into loops and closed with rings sagging 0.4 mm towards the centre, facing the opposing jaw. Display copy re-decimated.
+- The untouched scan is kept in IndexedDB as `<case>:<arch>:orig`; `case.scans.extracted` lists the taps, so "Put back" rebuilds from the original. Replacing or removing a scan clears both.
+- Bite check now uses a height map of the opposing scan across the occlusal axis (0.15 mm cells) instead of ray-casting every crown vertex: placing a bridge went from many seconds to about 1 s, extraction 0.6 s on the real case.
+- `toothSurfacePoints` only walks the voxel box around its centres (fine-tune also faster).
+- Mesh cache keys for scans include the face count, so an edited scan redraws everywhere.

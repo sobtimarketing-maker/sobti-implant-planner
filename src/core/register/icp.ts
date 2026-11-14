@@ -1,7 +1,7 @@
 // Trimmed ICP: refine a rigid fit of scan points onto CBCT surface points.
 // Nearest neighbours through a uniform hash grid (1 mm cells).
 import type { Vec3, Volume } from '../volume/volume';
-import { voxelToWorld } from '../volume/volume';
+import { voxelToWorld, worldToVoxel } from '../volume/volume';
 import { apply, fitRigid, M4, mul, rotateAbout, topEigenvector, translate } from './rigid';
 
 export class PointGrid {
@@ -99,15 +99,26 @@ export function toothSurfacePoints(v: Volume, iso: number, tooth: number, centre
   const [nx, ny, nz] = v.dims, d = v.data;
   const out: number[] = [];
   const r2 = radius * radius;
-  for (let k = 2; k < nz - 2; k++) for (let j = 2; j < ny - 2; j++) for (let i = 2; i < nx - 2; i++) {
+  // Only walk the voxel box around the centres (the corners of each centre's cube).
+  let lo = [2, 2, 2], hi = [nx - 3, ny - 3, nz - 3];
+  if (centres?.length) {
+    lo = [Infinity, Infinity, Infinity]; hi = [-Infinity, -Infinity, -Infinity];
+    for (const c of centres) for (let corner = 0; corner < 8; corner++) {
+      const q = worldToVoxel(v, [c[0] + (corner & 1 ? radius : -radius), c[1] + (corner & 2 ? radius : -radius), c[2] + (corner & 4 ? radius : -radius)]);
+      for (let a = 0; a < 3; a++) { lo[a] = Math.min(lo[a], Math.floor(q[a])); hi[a] = Math.max(hi[a], Math.ceil(q[a])); }
+    }
+    const dims = [nx, ny, nz];
+    for (let a = 0; a < 3; a++) { lo[a] = Math.max(2, lo[a]); hi[a] = Math.min(dims[a] - 3, hi[a]); }
+  }
+  for (let k = lo[2]; k <= hi[2]; k++) for (let j = lo[1]; j <= hi[1]; j++) for (let i = lo[0]; i <= hi[0]; i++) {
     const m = i + nx * (j + ny * k);
     if (d[m] < iso) continue;
     if (d[m - 1] >= iso && d[m + 1] >= iso && d[m - nx] >= iso && d[m + nx] >= iso && d[m - nx * ny] >= iso && d[m + nx * ny] >= iso) continue;
+    const p = voxelToWorld(v, i, j, k);
+    if (centres && !centres.some((c) => (c[0] - p[0]) ** 2 + (c[1] - p[1]) ** 2 + (c[2] - p[2]) ** 2 < r2)) continue;
     let bright = false;
     for (let dk = -2; dk <= 2 && !bright; dk++) for (let dj = -2; dj <= 2 && !bright; dj++) for (let di = -2; di <= 2; di++) if (d[m + di + nx * (dj + ny * dk)] >= tooth) { bright = true; break; }
     if (!bright) continue;
-    const p = voxelToWorld(v, i, j, k);
-    if (centres && !centres.some((c) => (c[0] - p[0]) ** 2 + (c[1] - p[1]) ** 2 + (c[2] - p[2]) ** 2 < r2)) continue;
     out.push(p[0], p[1], p[2]);
   }
   return new Float32Array(out);

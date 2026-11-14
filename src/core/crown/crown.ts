@@ -207,6 +207,45 @@ export function resizeUnits(span: CrownSpan, fdis: number[]): void {
 type Hit = (ro: Vec3, rd: Vec3) => number;
 export const meshHit = (m: TriMesh | null): Hit => (ro, rd) => (m ? rayMesh(m, ro, rd) : Infinity);
 
+/**
+ * Fast "how far up to the opposing teeth" for many points: the opposing
+ * surface is drawn once into a height map across the occlusal axis `o`
+ * (lowest surface per 0.15 mm cell). The returned hit only answers rays
+ * along +o, which is all the bite check asks.
+ */
+export function heightHit(m: TriMesh, o: Vec3, centre: Vec3, radius: number, cell = 0.15): Hit {
+  const a = norm(Math.abs(o[0]) < 0.9 ? cross(o, [1, 0, 0]) : cross(o, [0, 1, 0])), b = cross(o, a);
+  const n = Math.ceil((radius * 2) / cell), H = new Float32Array(n * n).fill(Infinity);
+  const P = m.positions, I = m.indices;
+  const U = new Float32Array(P.length / 3), V = new Float32Array(P.length / 3), Z = new Float32Array(P.length / 3);
+  for (let i = 0; i < U.length; i++) {
+    const d: Vec3 = [P[i * 3] - centre[0], P[i * 3 + 1] - centre[1], P[i * 3 + 2] - centre[2]];
+    U[i] = (dot(d, a) + radius) / cell; V[i] = (dot(d, b) + radius) / cell; Z[i] = dot(d, o);
+  }
+  for (let t = 0; t < I.length; t += 3) {
+    const i0 = I[t], i1 = I[t + 1], i2 = I[t + 2];
+    const x0 = U[i0], y0 = V[i0], x1 = U[i1], y1 = V[i1], x2 = U[i2], y2 = V[i2];
+    const det = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+    if (Math.abs(det) < 1e-9) continue;
+    const gx0 = Math.max(0, Math.floor(Math.min(x0, x1, x2))), gx1 = Math.min(n - 1, Math.ceil(Math.max(x0, x1, x2)));
+    const gy0 = Math.max(0, Math.floor(Math.min(y0, y1, y2))), gy1 = Math.min(n - 1, Math.ceil(Math.max(y0, y1, y2)));
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      const px = gx + 0.5, py = gy + 0.5;
+      const l1 = ((px - x0) * (y2 - y0) - (x2 - x0) * (py - y0)) / det, l2 = ((x1 - x0) * (py - y0) - (px - x0) * (y1 - y0)) / det, l0 = 1 - l1 - l2;
+      if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6) continue;
+      const z = l0 * Z[i0] + l1 * Z[i1] + l2 * Z[i2], k = gy * n + gx;
+      if (z < H[k]) H[k] = z;
+    }
+  }
+  return (ro) => {
+    const d: Vec3 = [ro[0] - centre[0], ro[1] - centre[1], ro[2] - centre[2]];
+    const gx = Math.floor((dot(d, a) + radius) / cell), gy = Math.floor((dot(d, b) + radius) / cell);
+    if (gx < 0 || gy < 0 || gx >= n || gy >= n) return Infinity;
+    const z = H[gy * n + gx], t = z - dot(d, o);
+    return t > 0 ? t : Infinity;
+  };
+}
+
 /** Triangles of a mesh within `radius` of `centre`, moved to world by `model` (column-major rigid). */
 export function nearbyMesh(m: TriMesh, model: ArrayLike<number> | null, centre: Vec3, radius: number): TriMesh {
   const P = m.positions, I = m.indices, r2 = radius * radius;

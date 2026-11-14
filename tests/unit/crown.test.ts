@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildUnit, crownTemplate, fitHeights, kindOf, meshHit, nearbyMesh, newSpan, occlusalAxis, seatOnGum, unitCentres } from '../../src/core/crown/crown';
+import { heightHit, buildUnit, crownTemplate, fitHeights, kindOf, meshHit, nearbyMesh, newSpan, occlusalAxis, seatOnGum, unitCentres } from '../../src/core/crown/crown';
 import type { TriMesh } from '../../src/core/mesh/mesh';
 import type { Vec3 } from '../../src/core/volume/volume';
 
@@ -65,6 +65,17 @@ describe('crown fitting', () => {
       expect(b.contact).toBeGreaterThan(-0.05);
       expect(b.contact).toBeLessThan(0.1);
     }
+  });
+  it('height map answers like a ray, and fits the same', () => {
+    const f = heightHit(opp, o, [0, 0, 0], 20);
+    expect(f([1.3, -2.1, 0], o)).toBeCloseTo(9, 3);
+    expect(f([1.3, -2.1, 10], o)).toBe(Infinity);
+    const span = newSpan('s', [-5, 0, 5], [5, 0, 5], [46], o, [0, -20, 0]);
+    seatOnGum(span, meshHit(gum));
+    fitHeights(span, f);
+    const b = buildUnit(span, span.units[0], f);
+    expect(b.contact).toBeGreaterThan(-0.05);
+    expect(b.contact).toBeLessThan(0.1);
   });
   it('grinds where the crown would push into the opposing teeth', () => {
     const span = newSpan('s', [-5, 0, 5], [5, 0, 5], [46], o, [0, -20, 0]);

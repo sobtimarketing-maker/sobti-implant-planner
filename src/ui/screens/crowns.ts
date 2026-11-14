@@ -10,17 +10,22 @@ import type { Vec3 } from '../../core/volume/volume';
 import type { TriMesh } from '../../core/mesh/mesh';
 import { rayMesh } from '../../core/mesh/raycast';
 import {
-  biteColors, buildUnit, BuiltCrown, CrownSpan, fitHeights, isUpper, KIND_LABEL, kindOf, meshHit, nearbyMesh, newSpan,
+  biteColors, buildUnit, heightHit, BuiltCrown, CrownSpan, fitHeights, isUpper, KIND_LABEL, kindOf, meshHit, nearbyMesh, newSpan,
   occlusalAxis, resizeUnits, seatOnGum, typicalSize, unitCentres,
 } from '../../core/crown/crown';
 import type { SceneSurface } from '../../render/vr/engine';
 import { sphereMesh } from '../../render/vr/shapes';
 import { h, icon } from '../dom';
 import { View3D } from '../view3d';
-import { onScansChanged, scanMeshes } from '../scanCache';
+import { onScansChanged, scanMeshes, setScanMesh } from '../scanCache';
+import { removeAndFill, selectTooth, ToothPick } from '../../core/mesh/extract';
+import { decimate } from '../../core/mesh/decimate';
+import { apply, inverseRigid } from '../../core/register/rigid';
+import { PointGrid, toothSurfacePoints } from '../../core/register/icp';
+import { getScan, putScan, StoredScan } from '../../core/store/db';
 
 type Arch = 'upper' | 'lower';
-type Pick = 'idle' | 'mesial' | 'distal';
+type Pick = 'idle' | 'mesial' | 'distal' | 'extract';
 export interface CrownsHandle { el: HTMLElement; dispose(): void; refresh(): void }
 
 const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -52,7 +57,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     if (!sc?.m || !tm) return false;
     const key = `${sc.m.map((x) => x.toFixed(4)).join(',')}:${meshes.has(other())}`;
     if (key === geoKey) return true;
-    geoKey = key; near.clear(); built.clear();
+    geoKey = key; near.clear(); oppHits.clear(); built.clear();
     const M = sc.m, P = tm.display.positions, W = new Float32Array(P.length);
     for (let i = 0; i < P.length; i += 3) { const x = P[i], y = P[i + 1], z = P[i + 2]; W[i] = M[0] * x + M[4] * y + M[8] * z + M[12]; W[i + 1] = M[1] * x + M[5] * y + M[9] * z + M[13]; W[i + 2] = M[2] * x + M[6] * y + M[10] * z + M[14]; }
     worldTreat = W;
@@ -80,7 +85,14 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     }
     return e;
   }
-  const oppHit = (span: CrownSpan) => { const n = nearFor(span); return n.opp && n.opp.indices.length ? meshHit(n.opp) : null; };
+  const oppHits = new Map<string, ReturnType<typeof heightHit>>();
+  const oppHit = (span: CrownSpan) => {
+    const n = nearFor(span);
+    if (!n.opp || !n.opp.indices.length) return null;
+    let f = oppHits.get(span.id);
+    if (!f) { f = heightHit(n.opp, span.o, scale(add(span.mesial, span.distal), 0.5), 18 + Math.sqrt(dist2(span.mesial, span.distal)) / 2); oppHits.set(span.id, f); }
+    return f;
+  };
 
   // ---------- crowns
   const built = new Map<string, BuiltCrown>();
@@ -128,7 +140,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     save();
   }
   function fit(span: CrownSpan, fresh = false) {
-    near.delete(span.id);
+    near.delete(span.id); oppHits.delete(span.id);
     seatOnGum(span, meshHit(nearFor(span).gum));
     const opp = oppHit(span);
     const r = fitHeights(span, opp);
@@ -140,6 +152,79 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     if (!fresh) save();
   }
 
+  // ---------- virtual extraction (scan mm; the untouched scan is kept as '<arch>:orig')
+  let ext: { pick: ToothPick; world: Vec3; preview: Uint8Array } | null = null;
+  let busy = '';
+  const origs = new Map<Arch, StoredScan>();
+  const toScan = (p: Vec3): Vec3 => apply(inverseRigid(sc!.m!), p);
+  const dirToScan = (d: Vec3): Vec3 => { const a = toScan([0, 0, 0]), b = toScan(d); return [b[0] - a[0], b[1] - a[1], b[2] - a[2]]; };
+  /** Tooth test from the CBCT: a scan vertex counts as tooth when it lies on the CBCT tooth surface. */
+  function toothTest(m: TriMesh, world: Vec3): ((i: number) => boolean) | undefined {
+    const grid = new PointGrid(toothSurfacePoints(v, 800, 1500, [world], 9), 1);
+    if (grid.size < 100) return undefined;
+    const M = sc!.m!, P = m.positions;
+    return (i) => { const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2]; return grid.nearest([M[0] * x + M[4] * y + M[8] * z + M[12], M[1] * x + M[5] * y + M[9] * z + M[13], M[2] * x + M[6] * y + M[10] * z + M[14]], 1.2).i >= 0; };
+  }
+  function previewExtract(world: Vec3, radius: number) {
+    const tm = meshes.get(treating())!;
+    const pick: ToothPick = { seed: toScan(world), o: dirToScan(occl), radius };
+    const preview = selectTooth(tm.display, pick, toothTest(tm.display, world));
+    ext = { pick, world, preview };
+    message = preview.some((x) => x) ? '' : 'No tooth found there. Tap on the crown of the tooth.';
+  }
+  async function applyExtractions(arch: Arch, list: { seed: Vec3; radius: number }[]): Promise<void> {
+    let orig = origs.get(arch) ?? await getScan(c.id, `${arch}:orig`).catch(() => undefined);
+    const firstEdit = !orig;
+    if (!orig) orig = meshes.get(arch)!;
+    origs.set(arch, orig);
+    let full = orig.full;
+    for (const e of list) {
+      const world = apply(sc!.m!, e.seed);
+      const sel = selectTooth(full, { seed: e.seed, o: dirToScan(arch === treating() ? occl : scale(occl, -1)), radius: e.radius }, toothTest(full, world));
+      full = removeAndFill(full, sel, dirToScan(arch === treating() ? occl : scale(occl, -1)));
+    }
+    const stored: StoredScan = list.length ? { full, display: decimate(full, 40000) } : orig;
+    setScanMesh(c.id, arch, stored);
+    // Save in the background; the screen moves on straight away.
+    const o0 = orig;
+    void (async () => {
+      try {
+        if (firstEdit && list.length) await putScan(c.id, `${arch}:orig`, o0);
+        await putScan(c.id, arch, stored);
+        if (!list.length) { await putScan(c.id, `${arch}:orig`, null); origs.delete(arch); }
+      } catch { message = 'The changed scan could not be saved on this device (storage full?). It is shown for now.'; updatePanel(); }
+    })();
+  }
+  function confirmExtract() {
+    if (!ext || !sc) return;
+    const e = { id: newId(), arch: treating(), seed: ext.pick.seed, radius: ext.pick.radius };
+    busy = 'Taking the tooth out of the scan…'; updatePanel();
+    setTimeout(async () => {
+      try {
+        const list = [...(sc.extracted ?? []).filter((x) => x.arch === e.arch), e];
+        await applyExtractions(e.arch, list);
+        sc.extracted = [...(sc.extracted ?? []), e];
+        message = 'Tooth taken out of the scan and the gum closed over. Crowns and the guide use this scan from now on.';
+      } catch { message = 'Could not change the scan on this device.'; }
+      busy = ''; ext = null; pick = 'idle'; save(); mount(); updatePanel();
+    }, 30);
+  }
+  function putBack(id: string) {
+    if (!sc?.extracted) return;
+    const e = sc.extracted.find((x) => x.id === id);
+    if (!e) return;
+    busy = 'Putting the tooth back…'; updatePanel();
+    setTimeout(async () => {
+      try {
+        const rest = sc.extracted!.filter((x) => x.id !== id);
+        await applyExtractions(e.arch, rest.filter((x) => x.arch === e.arch));
+        sc.extracted = rest;
+        message = 'Tooth put back on the scan.';
+      } catch { message = 'Could not change the scan on this device.'; }
+      busy = ''; save(); mount(); updatePanel();
+    }, 30);
+  }
+
   // ---------- tap handling
   const pickScan = (ro: Vec3, rd: Vec3): number => {
     const tm = meshes.get(treating());
@@ -149,6 +234,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     return best;
   };
   function tapped(p: Vec3) {
+    if (pick === 'extract') { previewExtract(p, ext?.pick.radius ?? 5.5); hero?.invalidate(); schedule(); updatePanel(); return; }
     if (pick === 'mesial') { pendingMesial = p; pick = 'distal'; message = ''; }
     else if (pick === 'distal' && pendingMesial) { placeSpan(pendingMesial, p); pendingMesial = null; mount(); }
     else {
@@ -171,7 +257,14 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     if (!geometry()) return out;
     for (const [arch, ms] of meshes) {
       if (arch !== treating() && (!showOpp || pick !== 'idle')) continue;
-      out.push({ key: `scan:${c.id}:${arch}`, color: arch === treating() ? [0.9, 0.72, 0.74] : [0.66, 0.78, 0.92], mesh: () => ms.display, model: sc!.m });
+      if (arch === treating() && ext && pick === 'extract') {
+        const sel = ext.preview, n = sel.length, col = new Uint8Array(n * 3);
+        for (let i = 0; i < n; i++) { const on = sel[i]; col[i * 3] = on ? 235 : 230; col[i * 3 + 1] = on ? 70 : 184; col[i * 3 + 2] = on ? 80 : 189; }
+        const key = `extract:${ext.pick.seed.map((x) => x.toFixed(2)).join(',')}:${ext.pick.radius}`;
+        out.push({ key, color: [1, 1, 1], mesh: () => ({ ...ms.display, colors: col }), model: sc!.m, vertexColors: true });
+        continue;
+      }
+      out.push({ key: `scan:${c.id}:${arch}:${ms.display.indices.length}`, color: arch === treating() ? [0.9, 0.72, 0.74] : [0.66, 0.78, 0.92], mesh: () => ms.display, model: sc!.m });
     }
     for (const sp of pr.spans) sp.units.forEach((_, i) => {
       const { key, b } = crown(sp, i);
@@ -228,7 +321,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     else lookAt('cheek');
     schedule();
   }
-  const badgeText = () => pick === 'mesial' ? 'Tap the contact point on the tooth in front of the gap (mesial)'
+  const badgeText = () => pick === 'extract' ? 'Tap the tooth to take out of the scan' : pick === 'mesial' ? 'Tap the contact point on the tooth in front of the gap (mesial)'
     : pick === 'distal' ? 'Now tap the contact point on the tooth behind the gap (distal)'
     : 'Tap a crown to choose it. Drag to turn, pinch to zoom.';
 
@@ -252,11 +345,25 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
       return;
     }
     body.push(h('p', { class: 'muted small' }, 'Crown first, implant after: the implant is planned under the crown. Tap the contact points on the teeth either side of the gap.'));
-    if (pick !== 'idle') {
+    if (pick === 'extract') {
+      body.push(h('h3', null, 'Take a tooth out'),
+        h('p', { class: 'muted small' }, 'Tap the tooth to extract. It turns red; check that only that tooth is red, then take it out. The gum is closed over the hole.'));
+      if (ext && ext.preview.some((x) => x)) {
+        const r = ext.pick.radius;
+        body.push(stepRow('Area', showNumbers ? `${(r * 2).toFixed(0)} mm` : '', () => { previewExtract(ext!.world, Math.max(3, r - 0.5)); }, () => { previewExtract(ext!.world, Math.min(9, r + 0.5)); }, 'Smaller', 'Larger'),
+          h('button', { class: 'btn primary', disabled: !!busy, onclick: confirmExtract }, 'Take this tooth out'));
+      }
+      body.push(h('button', { class: 'btn secondary', disabled: !!busy, onclick: () => { pick = 'idle'; ext = null; message = ''; mount(); updatePanel(); } }, 'Cancel'));
+    } else if (pick !== 'idle') {
       body.push(h('div', { class: 'ok-line small' }, pick === 'mesial' ? '1. Tap the mesial contact point (tooth in front of the gap).' : '2. Tap the distal contact point (tooth behind the gap).'),
         h('button', { class: 'btn secondary', onclick: () => { pick = 'idle'; pendingMesial = null; mount(); updatePanel(); } }, 'Cancel'));
     } else {
-      body.push(h('button', { class: 'btn primary', onclick: () => { pick = 'mesial'; pendingMesial = null; message = ''; mount(); updatePanel(); } }, icon('plus', 18), pr.spans.length ? 'Add another crown or bridge' : 'Add a crown or bridge'));
+      body.push(h('button', { class: 'btn primary', onclick: () => { pick = 'mesial'; pendingMesial = null; message = ''; mount(); updatePanel(); } }, icon('plus', 18), pr.spans.length ? 'Add another crown or bridge' : 'Add a crown or bridge'),
+        h('button', { class: 'btn secondary', onclick: () => { pick = 'extract'; ext = null; message = ''; mount(); updatePanel(); } }, icon('tooth', 18), 'Take a tooth out of the scan'));
+      const exts = (sc.extracted ?? []);
+      if (exts.length) body.push(h('div', { class: 'pair-list' }, exts.map((e, i) => h('div', { class: 'pair-row' },
+        h('span', null, `Extracted ${i + 1} (${e.arch} scan)`),
+        h('button', { class: 'btn secondary small', disabled: !!busy, onclick: () => putBack(e.id) }, 'Put back')))));
     }
     if (pr.spans.length) {
       body.push(h('h3', null, 'Crowns'), h('div', { class: 'pair-list' }, pr.spans.flatMap((sp) => sp.units.map((u, i) => h('button', {
@@ -303,7 +410,8 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
       showBite ? h('p', { class: 'muted small' }, 'Red: touching the opposing teeth. Yellow to green: close (up to 1 mm). Ivory: clear.') : null);
     if (doctor && sp) body.push(h('p', { class: 'muted small' }, `Long axis ${sp.o.map((x) => x.toFixed(2)).join(', ')} · ${isUpper(sp.units[0].fdi) ? 'upper' : 'lower'} jaw`));
     panel.replaceChildren(h('h2', null, 'Crowns'), ...(body.filter(Boolean) as HTMLElement[]),
-      message ? h('div', { class: /not fit|too close|did not|Add the/i.test(message) ? 'warn-line' : 'ok-line small' }, message) : h('span'));
+      busy ? h('div', { class: 'ok-line small' }, busy) : h('span'),
+      message ? h('div', { class: /not fit|too close|did not|Add the|No tooth|Could not/i.test(message) ? 'warn-line' : 'ok-line small' }, message) : h('span'));
   }
 
   const el = h('div', { class: 'viewer guided' }, h('div', { class: 'viewer-main' }, heroArea), panel);
