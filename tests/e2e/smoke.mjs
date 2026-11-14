@@ -36,7 +36,7 @@ try {
     await page.getByText('Check the scan').waitFor({ timeout: 180000 });
     console.log(`CBCT open to first image: ${((Date.now() - t0) / 1000).toFixed(1)} s`);
     await page.waitForTimeout(500);
-    await page.getByRole('button', { name: 'Bone', exact: true }).click();
+    await page.getByRole('button', { name: 'Bone', exact: true }).first().click();
     await page.waitForTimeout(300);
     await shot(page, '2-axial.png');
     // Tap a point and switch hero to coronal.
@@ -75,10 +75,35 @@ try {
     await page.getByRole('button', { name: 'Expert grid' }).click();
     await page.waitForTimeout(400);
     await shot(page, '4-expert.png');
+    // Step 3: arch, panoramic, nerve, teeth.
+    await page.getByRole('button', { name: 'Arch and nerve' }).click();
+    await page.getByRole('button', { name: 'Suggest arch at this level' }).click();
+    await page.getByRole('button', { name: 'Trace the nerve' }).waitFor();
+    await page.waitForTimeout(300);
+    await shot(page, '6-arch.png');
+    await page.getByRole('button', { name: 'Trace the nerve' }).click();
+    const pano = await page.locator('.split-a canvas').boundingBox();
+    const cs = await page.locator('.split-b canvas').boundingBox();
+    for (const fx of [0.15, 0.22, 0.3]) {
+      await page.mouse.click(pano.x + pano.width * fx, pano.y + pano.height * 0.62);
+      await page.waitForTimeout(150);
+      await page.mouse.click(cs.x + cs.width * 0.5, cs.y + cs.height * 0.62);
+      await page.waitForTimeout(150);
+    }
+    await page.getByRole('button', { name: /^Right \(3\)/ }).waitFor();
+    await page.getByRole('button', { name: 'Mark foramen here' }).click();
+    await shot(page, '7-nerve.png');
+    await page.getByRole('group', { name: 'Task' }).getByRole('button', { name: 'Teeth' }).click();
+    await page.mouse.click(pano.x + pano.width * 0.72, pano.y + pano.height * 0.47);
+    await page.waitForTimeout(200);
+    await page.mouse.click(cs.x + cs.width * 0.5, cs.y + cs.height * 0.5);
+    await page.waitForTimeout(500);
+    await shot(page, '8-teeth.png');
+    console.log('Teeth message:', await page.locator('.side-card .ok-line, .side-card .warn-line').first().textContent().catch(() => 'none'));
     // Reopen from the case list: volume should come back from the cache.
     await page.getByRole('button', { name: 'Back to cases' }).click();
     await page.getByRole('button', { name: /Open case Test Patient/ }).click();
-    await page.getByText('Check the scan').waitFor({ timeout: 20000 });
+    await page.locator('.split-a canvas').waitFor({ timeout: 20000 });
     console.log('Reopen from cache OK');
   }
   await page.getByRole('button', { name: 'Back to cases' }).click();

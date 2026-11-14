@@ -37,3 +37,21 @@ Built
 Tests: 20 unit (oblique vs axis-aligned equality, trilinear, frame drift, ROI agreement and edge clamp) + e2e on the real case (open 7.4 s, detail 2.5 s, measure, tilt, reopen).
 
 Next: Session 3: arch curve, panoramic, cross-sections, nerve tracing, tooth outlining.
+
+## Session 3 (2026-11-14): arch, panoramic, cross-sections, nerve, teeth
+Device test of Session 2 (Dr): all good.
+
+Built (step 3 "Arch and nerve", `src/ui/screens/anatomy.ts`)
+- Arch: tap points on an axial slice at a chosen level (drag to move, undo, clear), or "Suggest arch at this level" (`core/anatomy/arch.ts`: rays from behind the jaw, middle of the first bone run). Centripetal Catmull-Rom, resampled at the working voxel size (`core/geometry/curve.ts`).
+- Panoramic (`render/pano.ts`): mean slab 5/10/15/20 mm along buccal normals, nearest sampling on the working volume (about 100 ms). Arch always runs patient right → left; normal flipped to point away from the arch centroid.
+- Cross-sections: 40 × 50 mm, perpendicular to the arch, buccal on the left; uses the 0.15 mm detail box when it covers the spot. Thumbnails at −2 / +2 mm.
+- Nerve (`core/anatomy/nerve.ts`): right/left canals, points inserted where they lengthen the path least, radius 1.0/1.2/1.5 mm, tap snaps to the darkest 3×3 spot within 1.5 mm when clearly darker (>80 HU), mental foramen marker. Tube shown on pano, axial and as a circle where it crosses each cross-section. `distanceToNerve` ready for the Session 7 safety engine.
+- Teeth (`core/segment/`): tap inside a tooth → seed snaps to the brightest spot within 1 mm → 6-connected region grow above the outline level in a 14 × 14 × 30 mm box on the finest volume. Default level = 90th percentile of voxels > 300 HU (1900 HU on the test case). Warning above 1300 mm³ (leak). Masks stored bit-packed in the case. Surface by own naive surface nets (closed mesh, verified in tests) instead of marching cubes: no tables, lighter; used for 3D in Session 4.
+
+Known limits
+- Tooth outlining at the working level catches enamel and coronal dentin; roots usually need a lower level plus full detail. Fine-tune per tooth with the level slider and "redo".
+- Sinus marking (upper cases) not built yet; not needed for this lower-right case. Add with the upper workflow.
+
+Tests: 30 unit + e2e on the real case (suggested arch 9 points / 129 mm, 3 nerve points, foramen, tooth 415 mm³).
+
+Next: Session 4: WebGL2 3D view (volume + surfaces: teeth, nerve, later implants).

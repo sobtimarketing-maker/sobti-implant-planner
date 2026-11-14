@@ -6,6 +6,9 @@ import type { Vec3 } from '../volume/volume';
 
 export const CASE_SCHEMA = 1;
 
+/** Bit-packed segmentation mask (see core/segment/regionGrow packMask). */
+export interface StoredMask { origin: Vec3; spacing: Vec3; dims: Vec3; rowDir: Vec3; colDir: Vec3; normal: Vec3; count: number; bits: string }
+
 export type Treatment = 'implant' | 'crown' | 'bridge-pontic' | 'extraction' | 'graft' | 'sinus-lift';
 
 export const TREATMENTS: { id: Treatment; label: string }[] = [
@@ -81,6 +84,11 @@ export interface CaseRecord {
   };
   study?: CaseStudy;
   view?: { wc: number; ww: number; point?: Vec3; frame?: { ex: Vec3; ey: Vec3; ez: Vec3 }; spin?: { axial: number; coronal: number; sagittal: number } };
+  anatomy: {
+    arch?: { points: Vec3[]; slabMm: number };
+    nerves: { id: string; side: 'R' | 'L'; points: { p: Vec3; r: number }[]; foramen?: Vec3 }[];
+    teeth: { id: string; fdi: number; seed: Vec3; threshold: number; volumeMm3: number; mask: StoredMask }[];
+  };
   measurements: { id: string; a: Vec3; b: Vec3; view: 'axial' | 'coronal' | 'sagittal'; label?: string }[];
 }
 
@@ -110,6 +118,7 @@ export function newCase(): CaseRecord {
       sites: [], prosthesis: 'single-crowns', retention: 'screw', implantSystem: '',
       guideType: 'tooth-supported', surgeon: '', surgeryDate: '', notes: '',
     },
+    anatomy: { nerves: [], teeth: [] },
     measurements: [],
   };
 }
@@ -123,6 +132,7 @@ export function migrateCase(raw: unknown): CaseRecord {
     schema: CASE_SCHEMA,
     patient: { ...fresh.patient, ...c.patient, medical: { ...fresh.patient.medical, ...(c.patient?.medical ?? {}) } },
     plan: { ...fresh.plan, ...c.plan },
+    anatomy: { arch: c.anatomy?.arch, nerves: c.anatomy?.nerves ?? [], teeth: c.anatomy?.teeth ?? [] },
     measurements: c.measurements ?? [],
     // Session 1 stored a voxel cursor; it is dropped (views re-centre).
     view: c.view ? { wc: c.view.wc, ww: c.view.ww, point: c.view.point, frame: c.view.frame, spin: c.view.spin } : undefined,

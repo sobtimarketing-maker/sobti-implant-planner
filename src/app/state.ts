@@ -38,7 +38,7 @@ export function savePrefs(s: AppState): void {
 export const STEPS = [
   { label: 'Case & scan', ready: true },
   { label: 'Orientation', ready: true },
-  { label: 'Arch and nerve', ready: false },
+  { label: 'Arch and nerve', ready: true },
   { label: 'Add scans', ready: false },
   { label: 'Plan implant', ready: false },
   { label: 'Report', ready: false },

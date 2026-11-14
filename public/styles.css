@@ -171,6 +171,20 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .measure-go { flex: 1; min-height: 40px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--white); font-weight: 600; padding: 0 10px; text-align: left; }
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 
+/* Arch and nerve */
+.split { position: absolute; inset: 0; display: grid; grid-template-columns: 3fr 2fr; gap: 2px; background: #22355A; }
+.split-a, .split-b { position: relative; background: var(--image-bg); }
+.split .hero-slider { z-index: 1; }
+.hero .split + .hero-slider { left: 16px; right: 16px; }
+.thumbs.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.thumb:disabled { opacity: .6; cursor: default; }
+.tool-grid.three { grid-template-columns: repeat(3, 1fr); margin-bottom: 8px; }
+.tool:disabled { opacity: .45; }
+.stat { font-weight: 700; margin: 8px 0; }
+.side-card .btn { margin-top: 6px; }
+.side-card .field { margin-top: 8px; }
+.side-card input[type=range] { width: 100%; accent-color: var(--royal); min-height: 32px; }
+
 /* Expert (navy) theme */
 .workspace.navy { background: var(--navy); color: #EAF0FA; }
 .workspace.navy .card { background: #13325F; border-color: #22477E; color: #EAF0FA; }
