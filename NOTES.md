@@ -119,3 +119,8 @@ Next (Session 7): implants under the crowns, with nerve and neighbour distance c
 - Bite check now uses a height map of the opposing scan across the occlusal axis (0.15 mm cells) instead of ray-casting every crown vertex: placing a bridge went from many seconds to about 1 s, extraction 0.6 s on the real case.
 - `toothSurfacePoints` only walks the voxel box around its centres (fine-tune also faster).
 - Mesh cache keys for scans include the face count, so an edited scan redraws everywhere.
+
+### Session 6c: cleaner virtual extraction (Dr's feedback)
+- Tooth found from the CBCT outline of that one crown (`toothGrow`, crown only, seeded just inside the tapped surface): scan vertices within 1.2 mm of it are the tooth. Vertices on any other tooth surface are fixed and never move.
+- Fill: middle at the low gum level of the rim (30th percentile of the gum rim heights), rim-to-middle drop as r³; inner rings follow a rim smoothed over a growing window, so the jagged cut does not echo inwards; 40 rounds of height-only smoothing on the patch and full smoothing on 3 rings of gum around it; 0.4 mm dip in the middle.
+- After extraction the view centres on the closed socket (opposing jaw and bite colours off).

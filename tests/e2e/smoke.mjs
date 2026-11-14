@@ -231,10 +231,24 @@ try {
       await page.getByRole('button', { name: 'Take this tooth out' }).click();
       await page.locator('.side-card').getByText(/Tooth taken out|Could not/).waitFor({ timeout: 60000 });
       console.log(`Extraction: ${((Date.now() - t7) / 1000).toFixed(1)} s:`, await page.locator('.side-card .ok-line, .side-card .warn-line').last().textContent());
+      await page.waitForTimeout(1500);
+      await shot(page, '19b-socket-close.png');
+      await page.getByRole('button', { name: 'Put back' }).click();
+      await page.locator('.side-card').getByText(/put back/).waitFor({ timeout: 30000 });
+      await page.waitForTimeout(1500);
+      await shot(page, '19c-tooth-back.png');
       await page.getByRole('button', { name: 'Take a tooth out of the scan' }).click();
       await page.waitForTimeout(1200);
       await shot(page, '19-extracted.png');
       await page.getByRole('button', { name: 'Cancel' }).click();
+      // Close-ups of the closed socket, crowns hidden behind plain colour.
+      await page.getByRole('group', { name: 'Look from' }).getByRole('button', { name: 'Bite' }).click();
+      await page.waitForTimeout(1200);
+      await shot(page, '20-socket-bite.png');
+      await page.getByRole('group', { name: 'Look from' }).getByRole('button', { name: 'Cheek' }).click();
+      await page.getByRole('button', { name: 'Upper jaw' }).click();
+      await page.waitForTimeout(1200);
+      await shot(page, '21-socket-cheek.png');
     }
     // Reopen from the case list: volume should come back from the cache.
     await page.getByRole('button', { name: 'Back to cases' }).click();

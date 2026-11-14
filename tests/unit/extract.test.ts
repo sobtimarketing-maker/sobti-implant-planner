@@ -33,3 +33,27 @@ it('cuts a tooth out of the scan and closes the hole with gum', () => {
   for (let t = 0; t < I.length; t += 3) { const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3; up += (P[b] - P[a]) * (P[c + 1] - P[a + 1]) - (P[b + 1] - P[a + 1]) * (P[c] - P[a]); }
   expect(up).toBeGreaterThan(0);
 });
+
+it('leaves the neighbouring tooth exactly as it was and smooths the gum', () => {
+  // Two teeth 9 mm apart on the gum; take out the one at the origin.
+  const n = 80, p: number[] = [], f: number[] = [];
+  for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) {
+    const x = -15 + i * 0.4, y = -16 + j * 0.4;
+    const b = (cx: number) => { const r = Math.hypot(x - cx, y); return r < 4 ? 7 * Math.min(1, (4 - r) / 1) : 0; };
+    p.push(x, y, Math.max(b(0), b(9)));
+  }
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const a = j * (n + 1) + i; f.push(a, a + 1, a + n + 2, a, a + n + 2, a + n + 1); }
+  const m: TriMesh = { positions: new Float32Array(p), indices: new Uint32Array(f) };
+  const P = m.positions;
+  const mine = (i: number) => P[i * 3 + 2] > 0.3 && Math.hypot(P[i * 3], P[i * 3 + 1]) < 4.2;
+  const other = (i: number) => P[i * 3 + 2] > 0.05 && Math.hypot(P[i * 3] - 9, P[i * 3 + 1]) < 4.2;
+  const sel = selectTooth(m, { seed: [0, 0, 7], o: [0, 0, 1], radius: 8 }, mine);
+  const out = removeAndFill(m, sel, [0, 0, 1], 0.4, other);
+  // Every neighbour vertex is still there, unmoved.
+  const key = (x: number, y: number, z: number) => `${x.toFixed(4)},${y.toFixed(4)},${z.toFixed(4)}`;
+  const have = new Set<string>(); for (let i = 0; i < out.positions.length; i += 3) have.add(key(out.positions[i], out.positions[i + 1], out.positions[i + 2]));
+  for (let i = 0; i < P.length / 3; i++) if (other(i)) expect(have.has(key(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]))).toBe(true);
+  // No spikes left where the tooth was: the patch stays near the gum level.
+  let top = -Infinity; for (let i = 0; i < out.positions.length; i += 3) if (Math.hypot(out.positions[i], out.positions[i + 1]) < 3) top = Math.max(top, out.positions[i + 2]);
+  expect(top).toBeLessThan(0.3);
+});

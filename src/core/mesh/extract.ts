@@ -67,8 +67,13 @@ export function selectTooth(m: TriMesh, pick: ToothPick, isTooth?: (i: number) =
   return sel;
 }
 
-/** Cut the selected vertices out and close each hole with a gently sagging gum surface. */
-export function removeAndFill(m: TriMesh, sel: Uint8Array, o: Vec3, sag = 0.4): TriMesh {
+/**
+ * Cut the selected vertices out and close each hole with a gently sagging gum
+ * surface. The patch and a band of gum around it (`band` rings) are smoothed
+ * so the rim has no steps or spikes; vertices `fixed` accepts (the
+ * neighbouring teeth) never move.
+ */
+export function removeAndFill(m: TriMesh, sel: Uint8Array, o: Vec3, sag = 0.4, fixed?: (i: number) => boolean, band = 3): TriMesh {
   const P = m.positions, I = m.indices;
   const kept: number[] = [], removedEdges = new Map<string, [number, number]>();
   const ek = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
@@ -97,28 +102,49 @@ export function removeAndFill(m: TriMesh, sel: Uint8Array, o: Vec3, sag = 0.4): 
     if (v === s0 && loop.length >= 3) loops.push(loop);
   }
   const pos = Array.from(P), idx = kept.slice();
+  const nOrig = P.length / 3, fillR = new Map<number, number>();
+  const rimSet = new Set<number>();
   const H = (i: number) => pos[i * 3] * o[0] + pos[i * 3 + 1] * o[1] + pos[i * 3 + 2] * o[2];
   for (const loop of loops) {
     const N = loop.length;
-    const c: Vec3 = [0, 0, 0]; let hc = 0;
-    for (const v of loop) { c[0] += pos[v * 3] / N; c[1] += pos[v * 3 + 1] / N; c[2] += pos[v * 3 + 2] / N; hc += H(v) / N; }
-    hc -= sag;
+    const c: Vec3 = [0, 0, 0];
+    for (const v of loop) rimSet.add(v);
+    for (const v of loop) { c[0] += pos[v * 3] / N; c[1] += pos[v * 3 + 1] / N; c[2] += pos[v * 3 + 2] / N; }
+    // Gum level for the middle: low on the rim (the rim also climbs the neighbouring teeth).
+    const hs = loop.filter((v) => !fixed?.(v)).map(H).sort((x, y) => x - y);
+    const all = loop.map(H).sort((x, y) => x - y);
+    const hc = (hs.length >= 3 ? hs : all)[Math.floor((hs.length >= 3 ? hs : all).length * 0.3)];
     const ch = c[0] * o[0] + c[1] * o[1] + c[2] * o[2];
-    const K = Math.max(2, Math.min(8, Math.round(Math.sqrt(N) / 2)));
+    // Rim smoothed around the loop over a window: inner rings follow ever smoother outlines,
+    // so the jagged cut edge does not echo inwards as creases.
+    const rx = loop.map((v) => pos[v * 3]), ry = loop.map((v) => pos[v * 3 + 1]), rz = loop.map((v) => pos[v * 3 + 2]), rh = loop.map(H);
+    const smoothRim = (w: number) => {
+      if (w < 1) return { x: rx, y: ry, z: rz, h: rh };
+      const x: number[] = [], y: number[] = [], z: number[] = [], h: number[] = [];
+      for (let i = 0; i < N; i++) {
+        let sx = 0, sy = 0, sz = 0, sh = 0;
+        for (let d = -w; d <= w; d++) { const j = (i + d + N) % N; sx += rx[j]; sy += ry[j]; sz += rz[j]; sh += rh[j]; }
+        const k = 2 * w + 1; x.push(sx / k); y.push(sy / k); z.push(sz / k); h.push(sh / k);
+      }
+      return { x, y, z, h };
+    };
+    const K = Math.max(4, Math.min(14, Math.round(Math.sqrt(N))));
     const rings: number[][] = [loop];
     for (let k = 1; k < K; k++) {
       const r = 1 - k / K, ring: number[] = [];
-      for (const v of loop) {
-        const hb = H(v), s = r * r * (3 - 2 * r);
-        const h = hc + (hb - hc) * s;
-        // Flat position scaled towards the centre, then put at the blended height.
-        const fx = c[0] + (pos[v * 3] - c[0]) * r, fy = c[1] + (pos[v * 3 + 1] - c[1]) * r, fz = c[2] + (pos[v * 3 + 2] - c[2]) * r;
+      const sm = smoothRim(Math.min(Math.floor(N / 2) - 1, Math.round((1 - r) * N / 5)));
+      const s3 = r * r * r; // drop quickly from the rim to the gum level
+      for (let i = 0; i < N; i++) {
+        const h = hc + (sm.h[i] - hc) * s3;
+        const fx = c[0] + (sm.x[i] - c[0]) * r, fy = c[1] + (sm.y[i] - c[1]) * r, fz = c[2] + (sm.z[i] - c[2]) * r;
         const cur = fx * o[0] + fy * o[1] + fz * o[2];
+        fillR.set(pos.length / 3, r);
         ring.push(pos.length / 3); pos.push(fx + o[0] * (h - cur), fy + o[1] * (h - cur), fz + o[2] * (h - cur));
       }
       rings.push(ring);
     }
     const centre = pos.length / 3;
+    fillR.set(centre, 0);
     pos.push(c[0] + o[0] * (hc - ch), c[1] + o[1] * (hc - ch), c[2] + o[2] * (hc - ch));
     const tris: number[] = [];
     for (let k = 0; k < rings.length; k++) for (let i = 0; i < N; i++) {
@@ -137,6 +163,38 @@ export function removeAndFill(m: TriMesh, sel: Uint8Array, o: Vec3, sag = 0.4): 
     if (sx * o[0] + sy * o[1] + sz * o[2] < 0) for (let t = 0; t < tris.length; t += 3) { const x = tris[t + 1]; tris[t + 1] = tris[t + 2]; tris[t + 2] = x; }
     idx.push(...tris);
   }
+  // Smooth the patch and the gum around the rim (not the neighbouring teeth).
+  const nv = pos.length / 3, adj: number[][] = Array.from({ length: nv }, () => []);
+  for (let t = 0; t < idx.length; t += 3) for (let e = 0; e < 3; e++) { const a = idx[t + e], b = idx[t + (e + 1) % 3]; adj[a].push(b); adj[b].push(a); }
+  const move = new Uint8Array(nv);
+  for (const v of fillR.keys()) move[v] = 1;
+  let front = [...rimSet];
+  for (let ring = 0; ring <= band && front.length; ring++) {
+    const nextF: number[] = [];
+    for (const v of front) {
+      if (v < nOrig && fixed?.(v)) continue;
+      if (!move[v]) { move[v] = 2; }
+      if (ring < band) for (const w of adj[v]) if (!move[w] && w < nOrig) nextF.push(w);
+    }
+    front = nextF;
+  }
+  const mv: number[] = []; for (let v = 0; v < nv; v++) if (move[v]) mv.push(v);
+  const tmp = new Float64Array(nv * 3);
+  for (let it = 0; it < 40; it++) {
+    for (const v of mv) {
+      const nb = adj[v]; let x = 0, y = 0, z = 0;
+      for (const w of nb) { x += pos[w * 3]; y += pos[w * 3 + 1]; z += pos[w * 3 + 2]; }
+      const k = nb.length || 1;
+      let dx = x / k - pos[v * 3], dy = y / k - pos[v * 3 + 1], dz = z / k - pos[v * 3 + 2];
+      if (move[v] === 1) { const along = dx * o[0] + dy * o[1] + dz * o[2]; dx = o[0] * along; dy = o[1] * along; dz = o[2] * along; }
+      const lam = move[v] === 1 ? 0.6 : 0.3;
+      tmp[v * 3] = pos[v * 3] + lam * dx; tmp[v * 3 + 1] = pos[v * 3 + 1] + lam * dy; tmp[v * 3 + 2] = pos[v * 3 + 2] + lam * dz;
+    }
+    for (const v of mv) { pos[v * 3] = tmp[v * 3]; pos[v * 3 + 1] = tmp[v * 3 + 1]; pos[v * 3 + 2] = tmp[v * 3 + 2]; }
+  }
+  // A gentle dip towards the middle, as a healed socket.
+  for (const [v, r] of fillR) { const d = sag * (1 - r * r); pos[v * 3] -= o[0] * d; pos[v * 3 + 1] -= o[1] * d; pos[v * 3 + 2] -= o[2] * d; }
+
   // Drop vertices no triangle uses any more.
   const map = new Int32Array(pos.length / 3).fill(-1), out: number[] = [];
   const outIdx = new Uint32Array(idx.length);
