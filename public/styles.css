@@ -171,6 +171,8 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .measure-list { display: flex; flex-direction: column; gap: 6px; }
 .measure-row { display: flex; align-items: center; gap: 6px; }
 .measure-go { flex: 1; min-height: 40px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--white); font-weight: 600; padding: 0 10px; text-align: left; }
+.measure-go.on { border-color: var(--royal); box-shadow: 0 0 0 2px rgba(30,78,154,.25); }
+.btn.secondary.on { border-color: #FBAE49; background: #FFF4E3; }
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 
 /* Arch and nerve */

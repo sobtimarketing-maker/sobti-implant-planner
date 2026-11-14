@@ -87,7 +87,8 @@ export interface CaseRecord {
   anatomy: {
     arch?: { points: Vec3[]; slabMm: number };
     nerves: { id: string; side: 'R' | 'L'; points: { p: Vec3; r: number }[]; foramen?: Vec3 }[];
-    teeth: { id: string; fdi: number; seed: Vec3; threshold: number; volumeMm3: number; mask: StoredMask }[];
+    /** apex: root tip set by the user (else a typical root length is used). */
+    teeth: { id: string; fdi: number; seed: Vec3; threshold: number; volumeMm3: number; mask: StoredMask; apex?: Vec3 }[];
   };
   measurements: { id: string; a: Vec3; b: Vec3; view: 'axial' | 'coronal' | 'sagittal'; label?: string }[];
 }

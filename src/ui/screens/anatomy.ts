@@ -2,8 +2,9 @@
 // panoramic + cross-section to trace the mandibular canal and outline teeth.
 import type { AppState } from '../../app/state';
 import { CaseRecord, LOWER, newId, toothName, UPPER } from '../../core/case/model';
+import { jawOf, rootLength, toothGrow } from '../../core/segment/toothGrow';
 import { DEFAULT_NERVE_RADIUS, insertPoint, Nerve, nerveTube, snapToCanal } from '../../core/anatomy/nerve';
-import { maskAt, Mask, maskVolumeMm3, packMask, regionGrow, unpackMask } from '../../core/segment/regionGrow';
+import { maskAt, Mask, maskVolumeMm3, packMask, unpackMask } from '../../core/segment/regionGrow';
 import { Vec3, Volume } from '../../core/volume/volume';
 import { autoWindow, WINDOW_PRESETS } from '../../render/mpr';
 import { contains, samplePlane, sampleWorld, volumeCenter } from '../../render/oblique';
@@ -41,7 +42,12 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
   let lastPoint: Vec3 | null = null;
   let message = '';
   const planned = c.plan.sites.map((x) => x.fdi).sort((a, b) => a - b);
-  let toothFdi = planned.length ? planned[0] - 1 : 45;
+  // Teeth worth outlining: the neighbours of each planned implant site.
+  const neighbours = [...new Set(planned.flatMap((f) => [f - 1, f + 1]).filter((f) => f % 10 >= 1 && f % 10 <= 8 && !planned.includes(f)))];
+  const nextTooth = () => neighbours.find((f) => !an.teeth.some((t) => t.fdi === f));
+  let toothFdi = nextTooth() ?? (planned.length ? planned[0] - 1 : 45);
+  let apexFor: string | null = null;   // tooth id waiting for a root-tip tap
+  let selTooth: string | null = null;  // tooth the root-tip button acts on
   // Default outline level: 90th percentile of bone-and-tooth voxels, which sits
   // between cortical bone and dentin on typical scans. Adjustable.
   let threshold = (() => {
@@ -371,6 +377,13 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
       lastPoint = p;
       message = sx !== Math.round(x) || sy !== Math.round(y) ? 'Point snapped to the canal.' : '';
       save(); refreshCross(); updatePanel();
+    } else if (mode === 'teeth' && apexFor) {
+      const t = an.teeth.find((q) => q.id === apexFor);
+      apexFor = null;
+      if (!t) return;
+      const p: Vec3 = [img.origin[0] + (img.u[0] * x + img.v[0] * y) * img.px, img.origin[1] + (img.u[1] * x + img.v[1] * y) * img.px, img.origin[2] + (img.u[2] * x + img.v[2] * y) * img.px];
+      t.apex = p;
+      growTooth(t.seed, t.id);
     } else if (mode === 'teeth') {
       // Seed at the brightest spot within 1 mm of the tap (inside the dentin).
       const r = Math.max(1, Math.round(1 / img.px));
@@ -389,14 +402,20 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
   function growTooth(seed: Vec3, replaceId?: string) {
     const vol = vols().find((x) => contains(x, seed)) ?? v;
     const hu = sampleWorld([vol], seed);
-    const m = regionGrow(vol, seed, threshold);
-    if (!m) { message = `That spot is ${hu} HU, below the outline level (${threshold} HU). Tap inside the tooth or lower the level.`; updatePanel(); return; }
-    const big = m.count * m.spacing[0] * m.spacing[1] * m.spacing[2] > 1300; // larger than a big molar
-    const entry = { id: replaceId ?? newId(), fdi: toothFdi, seed, threshold, volumeMm3: maskVolumeMm3(m), mask: packMask(m) };
+    const old = an.teeth.find((t) => t.id === replaceId);
+    const fdi = old?.fdi ?? toothFdi;
+    const r = toothGrow(vol, seed, threshold, { jaw: jawOf(fdi), rootMm: rootLength(fdi), apex: old?.apex });
+    if (!r) { message = `That spot is ${hu} HU, below the outline level (${threshold} HU). Tap inside the tooth or lower the level.`; updatePanel(); return; }
+    const m = r.mask;
+    const entry: CaseRecord['anatomy']['teeth'][number] = { id: replaceId ?? newId(), fdi, seed, threshold, volumeMm3: maskVolumeMm3(m), mask: packMask(m), apex: old?.apex };
     masks.set(entry.id, m);
     const i = an.teeth.findIndex((t) => t.id === replaceId);
-    if (i >= 0) { entry.fdi = an.teeth[i].fdi; an.teeth[i] = entry; } else an.teeth.push(entry);
-    message = big ? 'The outline is very large and may have leaked into bone. Raise the outline level and redo it.' : `Tooth ${entry.fdi} outlined (${entry.volumeMm3.toFixed(0)} mm³).`;
+    if (i >= 0) an.teeth[i] = entry; else an.teeth.push(entry);
+    selTooth = entry.id;
+    message = r.wide
+      ? `Tooth ${fdi} outlined, but the crown may touch the next tooth. If it looks too wide, raise the outline level and redo it.`
+      : `Tooth ${fdi} outlined (${entry.volumeMm3.toFixed(0)} mm³). ${entry.apex ? 'Root ends at the tip you set.' : 'Root length is typical for this tooth; set the root tip if it is off.'}`;
+    if (!replaceId) toothFdi = nextTooth() ?? toothFdi;
     lastPoint = seed;
     pano = null;
     save(); panoView?.setImage(panoImage()); refreshCross(); updatePanel();
@@ -451,17 +470,24 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
     } else {
       const fdis = [...LOWER, ...UPPER];
       body.push(
-        h('p', { class: 'muted small' }, 'Pick the tooth number, then tap inside that tooth on the cross-section. The app fills its 3D shape. Outline the teeth next to each implant site. Double-tap a view to make it big.'),
+        h('p', { class: 'muted small' }, 'Optional. Outline the teeth next to each implant site so the plan can keep a safe distance from them. Pick the tooth number, then tap the middle of its crown on the cross-section. Double-tap a view to make it big.'),
         h('label', { class: 'field' }, h('span', null, 'Tooth'),
           h('select', { onchange: (e: Event) => { toothFdi = +(e.target as HTMLSelectElement).value; } },
             fdis.map((f) => h('option', { value: f, selected: f === toothFdi }, `${f} · ${toothName(f)}`)))),
         h('label', { class: 'field' }, h('span', null, `Outline level: ${threshold} HU`),
           h('input', { type: 'range', min: 300, max: 4000, step: 50, value: threshold, oninput: (e: Event) => { threshold = +(e.target as HTMLInputElement).value; (e.target as HTMLElement).previousElementSibling!.textContent = `Outline level: ${threshold} HU`; } })),
         h('div', { class: 'measure-list' }, an.teeth.map((t, i) => h('div', { class: 'measure-row' },
-          h('span', { class: 'measure-go' }, h('span', { class: 'dot', style: `background:rgb(${[91, 227, 160, 127, 178, 255, 239, 176, 92, 229, 72, 77, 213, 188, 124, 190, 140, 255, 255, 120, 200].slice((i % 7) * 3, (i % 7) * 3 + 3).join(',')})` }), `Tooth ${t.fdi}`, showNumbers ? h('span', { class: 'muted small' }, ` ${t.volumeMm3.toFixed(0)} mm³`) : null),
+          h('button', { class: `measure-go${selTooth === t.id ? ' on' : ''}`, 'aria-label': `Select tooth ${t.fdi}`, onclick: () => { selTooth = t.id; apexFor = null; updatePanel(); } }, h('span', { class: 'dot', style: `background:rgb(${[91, 227, 160, 127, 178, 255, 239, 176, 92, 229, 72, 77, 213, 188, 124, 190, 140, 255, 255, 120, 200].slice((i % 7) * 3, (i % 7) * 3 + 3).join(',')})` }), `Tooth ${t.fdi}`, showNumbers ? h('span', { class: 'muted small' }, ` ${t.volumeMm3.toFixed(0)} mm³`) : null),
           h('button', { class: 'icon-btn small', 'aria-label': `Redo tooth ${t.fdi} at the current level`, onclick: () => growTooth(t.seed, t.id) }, icon('reset', 16)),
           h('button', { class: 'icon-btn small', 'aria-label': `Delete tooth ${t.fdi}`, onclick: () => { an.teeth.splice(i, 1); masks.delete(t.id); pano = null; save(); mount(); updatePanel(); } }, icon('trash', 16)),
         ))),
+        (() => {
+          const t = an.teeth.find((q) => q.id === selTooth) ?? an.teeth[an.teeth.length - 1];
+          if (!t) return null;
+          return h('div', { class: 'row-btns' },
+            h('button', { class: `btn secondary${apexFor === t.id ? ' on' : ''}`, onclick: () => { apexFor = apexFor === t.id ? null : t.id; message = apexFor ? `Tap the root tip of tooth ${t.fdi} on the cross-section.` : ''; updatePanel(); } },
+              apexFor === t.id ? 'Cancel' : `Set root tip, tooth ${t.fdi}`));
+        })(),
         roiButtons(),
       );
     }
@@ -469,7 +495,7 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
       h('h2', null, 'Arch and nerve'),
       tabs,
       ...body.filter(Boolean) as HTMLElement[],
-      message ? h('div', { class: message.includes('below') || message.includes('leaked') || message.startsWith('No jaw') ? 'warn-line' : 'ok-line small' }, message) : h('span'),
+      message ? h('div', { class: message.includes('below') || message.includes('touch') || message.startsWith('No jaw') ? 'warn-line' : 'ok-line small' }, message) : h('span'),
       h('h3', null, 'Brightness'),
       h('div', { class: 'chips' }, [{ label: 'Auto', ...autoWindow(v) }, ...WINDOW_PRESETS.slice(0, 2)].map((p) => h('button', { class: 'chip', onclick: () => { win.wc = p.wc; win.ww = p.ww; views.forEach((x) => x.invalidateContent()); schedule(); } }, p.label))),
     );

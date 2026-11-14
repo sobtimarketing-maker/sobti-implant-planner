@@ -79,3 +79,26 @@ export function unpackMask(p: Omit<Mask, 'data'> & { bits: string }): Mask {
   void _b;
   return { ...rest, data };
 }
+
+/** Shrink a mask's box to the voxels it holds (smaller to store and mesh). */
+export function cropMask(m: Mask, pad = 1): Mask {
+  const [mx, my, mz] = m.dims;
+  let a = [Infinity, Infinity, Infinity], b = [-1, -1, -1];
+  for (let k = 0; k < mz; k++) for (let j = 0; j < my; j++) for (let i = 0; i < mx; i++) {
+    if (!m.data[i + mx * (j + my * k)]) continue;
+    if (i < a[0]) a[0] = i; if (j < a[1]) a[1] = j; if (k < a[2]) a[2] = k;
+    if (i > b[0]) b[0] = i; if (j > b[1]) b[1] = j; if (k > b[2]) b[2] = k;
+  }
+  if (b[0] < 0) return m;
+  a = a.map((x) => Math.max(0, x - pad));
+  b = b.map((x, ax) => Math.min(m.dims[ax] - 1, x + pad));
+  const d: Vec3 = [b[0] - a[0] + 1, b[1] - a[1] + 1, b[2] - a[2] + 1];
+  const data = new Uint8Array(d[0] * d[1] * d[2]);
+  for (let k = 0; k < d[2]; k++) for (let j = 0; j < d[1]; j++) {
+    const src = (a[0]) + mx * ((j + a[1]) + my * (k + a[2]));
+    data.set(m.data.subarray(src, src + d[0]), d[0] * (j + d[1] * k));
+  }
+  const o = m.origin;
+  const origin: Vec3 = [0, 1, 2].map((ax) => o[ax] + a[0] * m.spacing[0] * m.rowDir[ax] + a[1] * m.spacing[1] * m.colDir[ax] + a[2] * m.spacing[2] * m.normal[ax]) as Vec3;
+  return { ...m, origin, dims: d, data };
+}
