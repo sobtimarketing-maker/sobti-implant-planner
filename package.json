@@ -1,0 +1,26 @@
+{
+  "name": "sobti-implant-planner",
+  "version": "0.1.0",
+  "description": "Offline CBCT implant planner (Android tablet)",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "dev": "node build.mjs --serve",
+    "build": "node build.mjs",
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "test:e2e": "node tests/e2e/smoke.mjs"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.6.10",
+    "@capacitor/cli": "^7.6.10",
+    "@capacitor/core": "^7.6.10",
+    "@fontsource/cormorant-garamond": "^5.3.0",
+    "@fontsource/inter": "^5.3.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  },
+  "private": true
+}

@@ -1,0 +1,10 @@
+{
+  "appId": "com.drsobti.implantplanner",
+  "appName": "Implant Planner",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  }
+}

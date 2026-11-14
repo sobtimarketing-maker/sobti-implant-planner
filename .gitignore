@@ -1,0 +1,10 @@
+data/*
+!data/README_ONLY/
+node_modules/
+dist/
+android/app/build/
+*.dcm
+*.zip
+*.obj
+*.stl
+local.properties
