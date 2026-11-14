@@ -165,7 +165,7 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .tool { min-height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--white); font-weight: 600; color: var(--muted); }
 .tool.on { background: var(--royal); border-color: var(--royal); color: var(--white); }
 .btn.slim { min-height: 44px; margin-top: 10px; font-size: 14px; }
-.row-btns { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.row-btns { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
 .row-btns .btn { flex: 1; min-height: 44px; font-size: 14px; padding: 0 12px; }
 .icon-btn.small { width: 40px; height: 40px; border-radius: 10px; }
 .measure-list { display: flex; flex-direction: column; gap: 6px; }
@@ -241,3 +241,21 @@ body[data-mode="patient"] .readout, body[data-mode="patient"] .tech, body[data-m
 .v3d-row .chip.on { background: #FBAE49; color: #0E2A57; border-color: #FBAE49; }
 .v3d-gap { width: 8px; }
 .hero.is3d .hero-slider { display: none; }
+
+/* Add scans (Session 5) */
+.hero-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #EAF0FA; text-align: center; padding: 24px; }
+.hero-empty p { color: #8FA3C4; max-width: 420px; }
+.split.even { grid-template-columns: 1fr 1fr; }
+.thumbs.none { display: none; }
+.scan-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.scan-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.scan-name .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn.small { min-height: 40px; padding: 0 12px; font-size: 14px; }
+.pair-list { display: flex; flex-direction: column; gap: 4px; }
+.pair-row { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.pair-row .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.pair-row > span:nth-child(3) { flex: 1; }
+.ok-text { color: #1F8A5B; font-weight: 600; }
+.warn-text { color: #C2410C; font-weight: 600; }
+.nudge { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-top: 8px; }
+.nudge > .muted { width: 100%; }

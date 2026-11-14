@@ -13,6 +13,14 @@ import { h } from './dom';
 
 export interface View3DHost {
   base: Volume;
+  /** Show the CBCT volume (default: the shared look setting). */
+  volume?(): boolean;
+  /** Distance along a world ray to the nearest picked surface (Infinity if none). */
+  pickSurface?(ro: Vec3, rd: Vec3): number;
+  /** Where the camera starts (default: the whole volume). */
+  home?(): { center: Vec3; size: number };
+  /** A fixed cut for this view (instead of the shared one at the point). */
+  clip?(): { mode: ClipMode; at: Vec3 } | null;
   cursor(): Vec3 | null;
   setCursor?(p: Vec3): void;
   surfaces(): SceneSurface[];
@@ -43,7 +51,7 @@ export class View3D {
   private narrow = false;
   private barOpen = false;
 
-  constructor(private host: View3DHost, private o: { compact?: boolean; onDoubleTap?: () => void; label?: string } = {}) {
+  constructor(private host: View3DHost, private o: { compact?: boolean; onDoubleTap?: () => void; label?: string; bar?: boolean } = {}) {
     this.el = document.createElement('div');
     this.el.className = 'view view3d' + (o.compact ? ' compact' : '');
     this.canvas = document.createElement('canvas');
@@ -60,17 +68,24 @@ export class View3D {
     });
     this.ro.observe(this.el);
     look3d.listeners.add(this.onLook);
-    if (!o.compact) { this.bind(); this.bar = h('div', { class: 'v3d-bar' }); this.el.append(this.bar); this.drawBar(); }
+    if (!o.compact) this.bind();
+    if (!o.compact && o.bar !== false) { this.bar = h('div', { class: 'v3d-bar' }); this.el.append(this.bar); this.drawBar(); }
   }
 
   dispose(): void { this.ro.disconnect(); look3d.listeners.delete(this.onLook); clearTimeout(this.refineTimer); }
   invalidate(): void { this.dirty = true; }
   resetView(): void { this.cam = this.homeCamera(); this.invalidate(); }
+  /** Point the camera from a direction (deg). */
+  look(yawDeg: number, pitchDeg: number): void { this.cam = { ...this.cam, yaw: (yawDeg * Math.PI) / 180, pitch: (pitchDeg * Math.PI) / 180 }; this.invalidate(); }
 
+  private fitPending = true;
   private homeCamera(): Camera {
     const b = this.host.base;
-    const ext = Math.hypot(b.dims[0] * b.spacing[0], b.dims[1] * b.spacing[1], b.dims[2] * b.spacing[2]);
     const fov = (30 * Math.PI) / 180;
+    const hm = this.host.home?.();
+    this.fitPending = true;
+    if (hm) return { target: hm.center, yaw: this.cam?.yaw ?? 0, pitch: this.cam?.pitch ?? 0, dist: (hm.size / 2 / Math.tan(fov / 2)) * 1.1, fov };
+    const ext = Math.hypot(b.dims[0] * b.spacing[0], b.dims[1] * b.spacing[1], b.dims[2] * b.spacing[2]);
     return { target: volumeCenter(b), yaw: 0, pitch: 0, dist: (ext / 2 / Math.tan(fov / 2)) * 0.7, fov };
   }
 
@@ -103,8 +118,9 @@ export class View3D {
     return {
       cssW, cssH,
       width: Math.round(cssW * k), height: Math.round(cssH * k),
-      camera: this.cam, preset: look3d.preset, clip: look3d.clip, cursor: this.host.cursor(),
-      surfaces: this.host.surfaces(), fast, volume: look3d.scan,
+      camera: this.cam, preset: look3d.preset,
+      ...(() => { const fc = this.host.clip?.(); return fc ? { clip: fc.mode, cursor: fc.at } : { clip: look3d.clip, cursor: this.host.cursor() }; })(),
+      surfaces: this.host.surfaces(), fast, volume: this.host.volume ? this.host.volume() : look3d.scan,
     };
   }
 
@@ -112,6 +128,15 @@ export class View3D {
     if (!this.dirty) return;
     this.dirty = false;
     const fast = this.moving || !!this.host.interacting?.();
+    // Fit the home view to the view's shape once it has a size.
+    if (this.fitPending) {
+      const r = this.el.getBoundingClientRect();
+      if (r.width > 1 && r.height > 1) {
+        this.fitPending = false;
+        const aspect = r.width / r.height;
+        if (aspect < 1) this.cam = { ...this.cam, dist: this.cam.dist / aspect };
+      }
+    }
     const o = this.opts(fast);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const W = Math.round(o.cssW * dpr), H = Math.round(o.cssH * dpr);
@@ -207,7 +232,7 @@ export class View3D {
     if (!this.host.setCursor) return;
     const r = this.el.getBoundingClientRect();
     const o = this.opts(false);
-    const p = getEngine().pick({ ...o, width: o.cssW, height: o.cssH }, cx - r.left, cy - r.top);
+    const p = getEngine().pick({ ...o, width: o.cssW, height: o.cssH }, cx - r.left, cy - r.top, this.host.pickSurface);
     if (p) this.host.setCursor(p);
   }
 }

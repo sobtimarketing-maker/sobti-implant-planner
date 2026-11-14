@@ -162,10 +162,47 @@ try {
     await page.getByRole('button', { name: 'Back to panoramic and cross-section' }).click();
     await page.locator('.split-a canvas').waitFor();
     console.log('Teeth message:', await page.locator('.side-card .ok-line, .side-card .warn-line').first().textContent().catch(() => 'none'));
+    // Step 4: mouth scans, line up by points, fine-tune, check.
+    if (process.env.IOS_DIR) {
+      await page.getByRole('button', { name: 'Add scans' }).click();
+      const t5 = Date.now();
+      await page.getByLabel('Lower scan file').setInputFiles(join(process.env.IOS_DIR, 'restoration_lower.obj'));
+      await page.getByText(/Lower scan added/).waitFor({ timeout: 60000 });
+      console.log(`Lower scan read and saved: ${((Date.now() - t5) / 1000).toFixed(1)} s`);
+      await page.getByLabel('Upper scan file').setInputFiles(join(process.env.IOS_DIR, 'restoration_upper.obj'));
+      await page.getByText(/Upper scan added/).waitFor({ timeout: 60000 });
+      await page.locator('.split-a canvas').waitFor();
+      await page.waitForTimeout(800);
+      const sv = await page.locator('.split-a canvas').boundingBox();
+      const cv = await page.locator('.split-b canvas').boundingBox();
+      // Roughly matching spots on the test case: lower incisors, left molar, right premolar.
+      const spots = [[[0.53, 0.71], [0.455, 0.79]], [[0.85, 0.35], [0.78, 0.41]], [[0.27, 0.59], [0.21, 0.68]]];
+      for (const [[sx, sy], [cx, cy]] of spots) {
+        await page.mouse.click(sv.x + sv.width * sx, sv.y + sv.height * sy);
+        await page.waitForTimeout(450);
+        await page.mouse.click(cv.x + cv.width * cx, cv.y + cv.height * cy);
+        await page.waitForTimeout(450);
+      }
+      await shot(page, '10-scan-points.png');
+      await page.getByRole('button', { name: 'Line up (3 pairs)' }).click();
+      await page.locator('.thumbs.four canvas').first().waitFor();
+      await page.waitForTimeout(800);
+      await shot(page, '11-scan-lined-up.png');
+      const t6 = Date.now();
+      await page.getByRole('button', { name: 'Fine-tune on the teeth' }).click();
+      await page.locator('.side-card').getByText(/Fine-tuned|did not settle|Not enough/).waitFor({ timeout: 60000 });
+      console.log(`Fine-tune: ${((Date.now() - t6) / 1000).toFixed(1)} s:`, await page.locator('.side-card .ok-line, .side-card .warn-line').last().textContent());
+      await page.getByRole('button', { name: 'Show fit colours' }).click();
+      await page.waitForTimeout(1200);
+      await shot(page, '12-scan-colours.png');
+      await page.getByRole('button', { name: 'Check on the coronal slice' }).click();
+      await page.waitForTimeout(800);
+      await shot(page, '13-scan-coronal.png');
+    }
     // Reopen from the case list: volume should come back from the cache.
     await page.getByRole('button', { name: 'Back to cases' }).click();
     await page.getByRole('button', { name: /Open case Test Patient/ }).click();
-    await page.locator('.split-a canvas').waitFor({ timeout: 20000 });
+    await page.locator('.hero canvas').first().waitFor({ timeout: 20000 });
     console.log('Reopen from cache OK');
   }
   await page.getByRole('button', { name: 'Back to cases' }).click();

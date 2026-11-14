@@ -9,6 +9,7 @@ import type { SceneSurface, SurfaceMesh } from '../render/vr/engine';
 import { getEngine } from '../render/vr/engine';
 import { sphereMesh, tubeMesh } from '../render/vr/shapes';
 import { OVERLAY_COLORS } from './imageCanvas';
+import { scanMeshes } from './scanCache';
 
 const cache = new Map<string, SurfaceMesh>();
 const memo = (key: string, make: () => SurfaceMesh) => () => { let m = cache.get(key); if (!m) { m = make(); cache.set(key, m); } return m; };
@@ -26,10 +27,17 @@ export function sceneSurfaces(c: CaseRecord, cursor: Vec3 | null): SceneSurface[
     out.push({ key, color: [0.9, 0.28, 0.3], mesh: memo(key, () => tubeMesh(nerveTube(n))) });
     if (n.foramen) out.push({ key: 'sphere', color: [0.98, 0.68, 0.29], mesh: memo('sphere', () => sphereMesh()), at: [...n.foramen, 1.6] as [number, number, number, number] });
   }
+  // Mouth scans, once lined up with the CBCT.
+  if (c.scans?.m) {
+    const ms = scanMeshes(c.id);
+    for (const [arch, sc] of ms) {
+      out.push({ key: `scan:${c.id}:${arch}`, color: arch === c.scans.treating ? [0.93, 0.62, 0.78] : [0.62, 0.8, 0.95], mesh: () => sc.display, model: c.scans.m });
+    }
+  }
   if (cursor) out.push({ key: 'sphere', color: [0.98, 0.82, 0.3], mesh: memo('sphere', () => sphereMesh()), at: [...cursor, 1.2] as [number, number, number, number] });
   // Drop cached meshes nobody uses any more (keep the sphere).
   const keys = new Set(out.map((s) => s.key));
   for (const k of cache.keys()) if (!keys.has(k) && k !== 'sphere') cache.delete(k);
-  getEngine().keepMeshes(keys);
+  getEngine().keepMeshes(new Set([...keys, ...[...getEngine().meshKeys()].filter((k) => k.startsWith('scan'))]));
   return out;
 }

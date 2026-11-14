@@ -11,6 +11,7 @@ const common = { bundle: true, sourcemap: true, target: ['chrome103'], loader: {
 const ctxs = await Promise.all([
   esbuild.context({ ...common, entryPoints: { main: 'src/app/main.ts' }, outdir: 'dist', format: 'iife' }),
   esbuild.context({ ...common, entryPoints: { 'load.worker': 'src/workers/load.worker.ts' }, outdir: 'dist', format: 'iife' }),
+  esbuild.context({ ...common, entryPoints: { 'mesh.worker': 'src/workers/mesh.worker.ts' }, outdir: 'dist', format: 'iife' }),
 ]);
 if (watch) {
   await Promise.all(ctxs.map((c) => c.watch()));

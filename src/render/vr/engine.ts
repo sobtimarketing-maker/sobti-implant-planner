@@ -14,7 +14,7 @@ import type { Vec3, Volume } from '../../core/volume/volume';
 import { HU_MIN, HU_SPAN, PresetId, firstVisible, transferTable } from './presets';
 import { Mat4, invert, lookAt, multiply, perspective, transformPoint } from './mat4';
 
-export interface SurfaceMesh { positions: Float32Array; indices: Uint32Array }
+export interface SurfaceMesh { positions: Float32Array; indices: Uint32Array; colors?: Uint8Array }
 
 export interface SceneSurface {
   key: string;                       // cache key: change it when the shape changes
@@ -22,6 +22,10 @@ export interface SceneSurface {
   mesh: () => SurfaceMesh;
   /** Place the mesh: offset (mm) and scale, for shared shapes like the point marker. */
   at?: [number, number, number, number];
+  /** Rigid placement (column-major 4×4), e.g. a mouth scan's scan -> CBCT fit. */
+  model?: ArrayLike<number>;
+  /** Use the mesh's own vertex colours (e.g. a distance map) instead of color. */
+  vertexColors?: boolean;
 }
 
 export interface Camera { target: Vec3; yaw: number; pitch: number; dist: number; fov: number }
@@ -39,6 +43,7 @@ export interface RenderOpts {
   volume: boolean;                 // draw the volume (else surfaces only)
 }
 
+const IDENTITY4 = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 const BG: [number, number, number] = [5 / 255, 11 / 255, 22 / 255];
 
 export function cameraEye(c: Camera): { eye: Vec3; up: Vec3 } {
@@ -140,22 +145,27 @@ void main() {
 }`;
 
 const VS_MESH = `#version 300 es
-in vec3 aPos; in vec3 aNrm;
-uniform mat4 uVP; uniform vec4 uAt;
-out vec3 vN; out vec3 vW;
-void main() { vN = aNrm; vW = aPos * uAt.w + uAt.xyz; gl_Position = uVP * vec4(vW, 1.0); }`;
+in vec3 aPos; in vec3 aNrm; in vec3 aCol;
+uniform mat4 uVP; uniform vec4 uAt; uniform mat4 uModel;
+out vec3 vN; out vec3 vW; out vec3 vC;
+void main() {
+  vN = mat3(uModel) * aNrm; vC = aCol;
+  vW = (uModel * vec4(aPos * uAt.w + uAt.xyz, 1.0)).xyz;
+  gl_Position = uVP * vec4(vW, 1.0);
+}`;
 
 const FS_MESH = `#version 300 es
 precision highp float;
-in vec3 vN; in vec3 vW;
-uniform vec3 uColor; uniform vec3 uEye; uniform vec4 uClip; uniform int uClipOn;
+in vec3 vN; in vec3 vW; in vec3 vC;
+uniform vec3 uColor; uniform vec3 uEye; uniform vec4 uClip; uniform int uClipOn; uniform int uUseCol;
 out vec4 outColor;
 void main() {
   if (uClipOn == 1 && dot(uClip.xyz, vW) + uClip.w > 0.0) discard;
   vec3 n = normalize(vN);
   vec3 v = normalize(uEye - vW);
   float d = abs(dot(n, v));
-  outColor = vec4(uColor * (0.3 + 0.7 * d) + pow(d, 30.0) * 0.25, 1.0);
+  vec3 base = uUseCol == 1 ? vC : uColor;
+  outColor = vec4(base * (0.3 + 0.7 * d) + pow(d, 30.0) * 0.25, 1.0);
 }`;
 
 interface GpuMesh { vao: WebGLVertexArrayObject; buffers: WebGLBuffer[]; count: number }
@@ -321,12 +331,21 @@ export class Engine3D {
     let loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, nb); gl.bufferData(gl.ARRAY_BUFFER, normals, gl.STATIC_DRAW);
     loc = gl.getAttribLocation(prog, 'aNrm'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+    const buffers = [pb, nb, ib];
+    loc = gl.getAttribLocation(prog, 'aCol');
+    if (m.colors && loc >= 0) {
+      const cb = gl.createBuffer()!; buffers.push(cb);
+      gl.bindBuffer(gl.ARRAY_BUFFER, cb); gl.bufferData(gl.ARRAY_BUFFER, m.colors, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+    } else if (loc >= 0) { gl.disableVertexAttribArray(loc); gl.vertexAttrib3f(loc, 0.8, 0.8, 0.8); }
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.indices, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
-    const g = { vao, buffers: [pb, nb, ib], count: m.indices.length };
+    const g = { vao, buffers, count: m.indices.length };
     this.meshes.set(s.key, g);
     return g;
   }
+
+  meshKeys(): IterableIterator<string> { return this.meshes.keys(); }
 
   /** Free GPU meshes whose keys are no longer used. */
   keepMeshes(keys: Set<string>): void {
@@ -384,6 +403,8 @@ export class Engine3D {
       if (!g) continue;
       gl.uniform3fv(this.u(mp, 'uColor'), s.color);
       gl.uniform4fv(this.u(mp, 'uAt'), s.at ?? [0, 0, 0, 1]);
+      gl.uniformMatrix4fv(this.u(mp, 'uModel'), false, s.model ? Float32Array.from(s.model) : IDENTITY4);
+      gl.uniform1i(this.u(mp, 'uUseCol'), s.vertexColors ? 1 : 0);
       gl.bindVertexArray(g.vao);
       gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
     }
@@ -442,7 +463,7 @@ export class Engine3D {
     const step = Math.min(...v.spacing) * 0.5;
     const w2t = invert(texToWorld(v));
     let acc = 0;
-    for (let t = 0; t < l && t < tSurf; t += step) {
+    for (let t = 0; o.volume && t < l && t < tSurf; t += step) {
       const p: Vec3 = [a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t];
       if (clip && clip[0] * p[0] + clip[1] * p[1] + clip[2] * p[2] + clip[3] > 0) continue;
       const tc = transformPoint(w2t, p);

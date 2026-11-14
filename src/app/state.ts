@@ -39,7 +39,7 @@ export const STEPS = [
   { label: 'Case & scan', ready: true },
   { label: 'Orientation', ready: true },
   { label: 'Arch and nerve', ready: true },
-  { label: 'Add scans', ready: false },
+  { label: 'Add scans', ready: true },
   { label: 'Plan implant', ready: false },
   { label: 'Report', ready: false },
 ];

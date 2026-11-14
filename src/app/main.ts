@@ -7,6 +7,7 @@ import { CaseRecord, caseTitle, dicomDate, newCase, sitesSummary } from '../core
 import type { LoadProgress, LoadResult } from '../workers/loader';
 import { renderHome } from '../ui/screens/home';
 import { renderIntake } from '../ui/screens/intake';
+import { renderScans } from '../ui/screens/scans';
 import { renderAnatomy } from '../ui/screens/anatomy';
 import { renderViewer, RoiControl, ROI_SIZE_MM, ViewerHandle } from '../ui/screens/viewer';
 import type { Volume } from '../core/volume/volume';
@@ -106,13 +107,15 @@ function goStep(i: number) {
 }
 
 function renderWorkspace(c: CaseRecord) {
-  const maxReached = state.volume ? 2 : 0;
+  const maxReached = state.volume ? 3 : 0;
   const step = Math.min(c.step, maxReached);
   let body: HTMLElement;
   if (step === 0) {
     body = renderIntake(state, c, { changed, loadFiles, next: () => goStep(1) }, load);
   } else {
-    viewer = step === 2
+    viewer = step === 3
+      ? renderScans(state, c, changed, roiControl)
+      : step === 2
       ? renderAnatomy(state, c, changed, roiControl)
       : renderViewer(state, c, changed, { on: expert, toggle: () => { expert = !expert; render(); } }, roiControl);
     body = viewer.el;

@@ -81,3 +81,19 @@ Tooth outline (`core/segment/toothGrow.ts`)
 - Limit: multi-rooted molars get one tapered root (good enough for distance checks and 3D, not anatomically exact).
 
 Next: Session 5: import the intraoral scans (OBJ/STL) and merge them with the CBCT by landmark points.
+
+## Session 5: mouth scans and line-up with the CBCT
+
+Built (step 4 "Add scans", `src/ui/screens/scans.ts`)
+- Load upper and lower scans (OBJ or STL, any size). `workers/mesh.worker.ts` parses (`core/mesh/obj.ts` streaming, `stl.ts` binary/ASCII with vertex merge), decimates for display (`decimate.ts`, vertex clustering to ~40K faces) and the app saves both copies in IndexedDB (`meshes` store, DB v2). Real lower scan: 303K faces read, reduced and saved in ~1 s.
+- Implant jaw choice (lower/upper). Before line-up: scan alone (left) and CBCT with the other jaw cut away (right, "CBCT cut level" slider). Tap 3 or more matching points; coloured pairs, undo, clear.
+- Line-up: Horn quaternion fit (`core/register/rigid.ts`), scan mm → world LPS mm, stored as column-major 4×4 in `case.scans.m`. Per-point mm shown; a point over 1.5 mm is flagged.
+- Fine-tune (`core/register/icp.ts`): trimmed ICP, point-to-plane (normals from neighbour spread, 6×6 solve) with point-to-point fallback. Source: scan vertices within 10 mm of the tapped points. Target: CBCT tooth surface (iso 800 HU next to ≥1500 HU) within 12 mm of the CT points, and only on the implant jaw's side of the biting level (so opposing teeth cannot pull it). Refused when surface RMS > 0.5 mm, < 200 inliers or a point ends > 5 mm away; a move of more than 1 mm average from the taps is applied but reported, with Undo.
+- Checks: hero 3D or axial/coronal/sagittal slice with the scan cut outline (pink implant jaw, cyan other); fit colour map (green ≤ 0.3 mm, red ≥ 1 mm); doctor-only nudge 0.1 mm / 0.1°.
+- On the real case (e2e approximate taps, 0.8 mm mean): fine-tune gives 0.21 mm surface RMS in about 1 s; crowns fully green.
+
+Tried and dropped
+- Automatic global line-up without points: 472 s and matched the wrong jaw. Points stay the method.
+- Point-to-point ICP alone: stalls about 1 mm off on smooth surfaces (unit test shows it); point-to-plane fixes it.
+
+Next (Session 6): crown library and occlusion on the lined-up scans.

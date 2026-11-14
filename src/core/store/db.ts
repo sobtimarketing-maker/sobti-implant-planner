@@ -1,9 +1,10 @@
 // Own IndexedDB wrapper: cases (JSON) and cached working volumes (binary).
 import { CaseRecord, migrateCase } from '../case/model';
 import type { VolumeInfo } from '../volume/volume';
+import type { TriMesh } from '../mesh/mesh';
 
 const DB_NAME = 'implant-planner';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbp: Promise<IDBDatabase> | null = null;
 
@@ -15,6 +16,7 @@ function open(): Promise<IDBDatabase> {
       const db = req.result;
       if (!db.objectStoreNames.contains('cases')) db.createObjectStore('cases', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('volumes')) db.createObjectStore('volumes');
+      if (!db.objectStoreNames.contains('meshes')) db.createObjectStore('meshes');
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -50,6 +52,19 @@ export async function putCase(c: CaseRecord): Promise<void> {
 export async function deleteCase(id: string): Promise<void> {
   await tx('cases', 'readwrite', (s) => s.delete(id));
   await tx('volumes', 'readwrite', (s) => s.delete(id));
+  for (const arch of ['upper', 'lower']) await tx('meshes', 'readwrite', (s) => s.delete(`${id}:${arch}`)).catch(() => undefined);
+}
+
+/** Mouth scans: full mesh (for the guide later) and a light display copy. */
+export interface StoredScan { full: TriMesh; display: TriMesh }
+
+export async function putScan(caseId: string, arch: 'upper' | 'lower', m: StoredScan | null): Promise<void> {
+  if (m) await tx('meshes', 'readwrite', (s) => s.put(m, `${caseId}:${arch}`));
+  else await tx('meshes', 'readwrite', (s) => s.delete(`${caseId}:${arch}`));
+}
+
+export async function getScan(caseId: string, arch: 'upper' | 'lower'): Promise<StoredScan | undefined> {
+  return tx<StoredScan | undefined>('meshes', 'readonly', (s) => s.get(`${caseId}:${arch}`));
 }
 
 export interface CachedVolume { info: VolumeInfo; data: Int16Array }

@@ -91,6 +91,24 @@ export interface CaseRecord {
     teeth: { id: string; fdi: number; seed: Vec3; threshold: number; volumeMm3: number; mask: StoredMask; apex?: Vec3 }[];
   };
   measurements: { id: string; a: Vec3; b: Vec3; view: 'axial' | 'coronal' | 'sagittal'; label?: string }[];
+  /** Mouth scans (meshes are stored separately) and their fit to the CBCT. */
+  scans?: CaseScans;
+}
+
+export interface ScanFileInfo { name: string; vertices: number; faces: number }
+export interface CaseScans {
+  upper?: ScanFileInfo;
+  lower?: ScanFileInfo;
+  /** The arch with the implant sites: it is lined up; the other arch follows in the bite. */
+  treating: 'upper' | 'lower';
+  /** Matching points: on the scan (scan mm) and on the CBCT (world LPS mm). */
+  pairs: { scan?: Vec3; ct?: Vec3 }[];
+  /** Scan mm -> world LPS mm (column-major 4×4), once lined up. */
+  m?: number[];
+  /** Error per pair after the fit (mm), and the fine-tune surface error. */
+  residuals?: number[];
+  surfaceRms?: number;
+  method?: 'points' | 'points+surface' | 'adjusted';
 }
 
 export function newId(): string {
