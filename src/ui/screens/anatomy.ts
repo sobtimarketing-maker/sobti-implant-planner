@@ -268,6 +268,7 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
       panoView = new ImageCanvas({
         label: 'Panoramic', window: getWin, letters: () => ['R', 'L', 'S', 'I'], draw: drawPanoOverlay,
         onTap: (x, y) => { posIdx = Math.max(0, Math.min(geom!.w - 1, Math.round(x))); posZ = geom!.zTop - y * geom!.px; refreshCross(); panoView!.invalidate(); schedule(); },
+        onDoubleTap: () => toggleBig('a'),
       });
       panoView.setImage(panoImage());
       crossCur = crossImage();
@@ -275,14 +276,15 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
         label: 'Cross-section', window: getWin, letters: () => ['Buccal', 'Lingual', 'S', 'I'],
         draw: (ctx, map, k, dpr) => drawCrossOverlay(crossCur)(ctx, map, k, dpr),
         onTap: (x, y) => crossTap(x, y),
+        onDoubleTap: () => toggleBig('b'), deferTap: true,
         onScroll: (d, wheel) => { if (wheel) { posIdx = clampIdx(posIdx + d); refreshCross(); } },
       });
       crossView.setImage(crossCur);
       views.push(panoView, crossView);
-      heroArea.replaceChildren(
-        h('div', { class: 'split' },
+      const split = h('div', { class: 'split' + (bigOne ? ` only-${bigOne}` : '') },
           h('div', { class: 'split-a' }, panoView.el, h('span', { class: 'badge' }, 'Panoramic: tap to go there')),
-          h('div', { class: 'split-b' }, crossView.el, h('span', { class: 'badge' }, mode === 'nerve' ? 'Cross-section: tap the canal' : 'Cross-section: tap inside a tooth'))),
+          h('div', { class: 'split-b' }, crossView.el, h('span', { class: 'badge' }, mode === 'nerve' ? 'Cross-section: tap the canal' : 'Cross-section: tap inside a tooth')));
+      heroArea.replaceChildren(split,
         h('div', { class: 'hero-slider' }, h('span', null, 'Along the arch'), slider, sliderLabel));
       slider.min = '0'; slider.max = String(geom!.w - 1); slider.value = String(posIdx);
       slider.oninput = () => { posIdx = clampIdx(+slider.value); refreshCross(); };
@@ -303,6 +305,19 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
       thumbRow.replaceChildren(...thumbs);
       updateSliderLabel();
     }
+    schedule();
+  }
+
+  // Double tap the panoramic (a) or cross-section (b) to fill the big area
+  // with it; double tap again to show both.
+  let bigOne: 'a' | 'b' | null = null;
+  function toggleBig(which: 'a' | 'b') {
+    bigOne = bigOne === which ? null : which;
+    const split = heroArea.querySelector('.split');
+    split?.classList.remove('only-a', 'only-b');
+    if (bigOne) split?.classList.add(`only-${bigOne}`);
+    panoView?.resetView(); crossView?.resetView();
+    views.forEach((x) => x.invalidate());
     schedule();
   }
 
@@ -421,7 +436,7 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
     } else if (mode === 'nerve') {
       const nr = an.nerves.find((n) => n.side === 'R'), nl = an.nerves.find((n) => n.side === 'L');
       body.push(
-        h('p', { class: 'muted small' }, 'Tap the canal on the panoramic to go there, then tap its centre in the cross-section. Add a point every 5 to 10 mm, from the mental foramen back to the ramus.'),
+        h('p', { class: 'muted small' }, 'Tap the canal on the panoramic to go there, then tap its centre in the cross-section. Add a point every 5 to 10 mm, from the mental foramen back to the ramus. Double-tap a view to make it big, and again to go back.'),
         h('div', { class: 'segmented small', role: 'group', 'aria-label': 'Nerve side' },
           ([['R', `Right (${nr?.points.length ?? 0})`], ['L', `Left (${nl?.points.length ?? 0})`]] as const).map(([sd, l]) => h('button', { class: side === sd ? 'on' : '', 'aria-pressed': String(side === sd), onclick: () => { side = sd; updatePanel(); } }, l))),
         h('h3', null, 'Canal radius'),
@@ -436,7 +451,7 @@ export function renderAnatomy(s: AppState, c: CaseRecord, onChange: () => void, 
     } else {
       const fdis = [...LOWER, ...UPPER];
       body.push(
-        h('p', { class: 'muted small' }, 'Pick the tooth number, then tap inside that tooth on the cross-section. The app fills its 3D shape. Outline the teeth next to each implant site.'),
+        h('p', { class: 'muted small' }, 'Pick the tooth number, then tap inside that tooth on the cross-section. The app fills its 3D shape. Outline the teeth next to each implant site. Double-tap a view to make it big.'),
         h('label', { class: 'field' }, h('span', null, 'Tooth'),
           h('select', { onchange: (e: Event) => { toothFdi = +(e.target as HTMLSelectElement).value; } },
             fdis.map((f) => h('option', { value: f, selected: f === toothFdi }, `${f} · ${toothName(f)}`)))),

@@ -60,3 +60,15 @@ describe('full-resolution region', () => {
     expect(roi.origin).toEqual(v.origin);
   });
 });
+
+import { DoubleTap } from '../../src/ui/doubleTap';
+describe('double tap', () => {
+  it('needs two close taps within 350 ms', () => {
+    const d = new DoubleTap();
+    expect(d.tap(10, 10, 0)).toBe(false);
+    expect(d.tap(12, 11, 200)).toBe(true);
+    expect(d.tap(12, 11, 300)).toBe(false); // starts over
+    expect(d.tap(12, 11, 800)).toBe(false); // too slow
+    expect(d.tap(200, 11, 900)).toBe(false); // too far
+  });
+});

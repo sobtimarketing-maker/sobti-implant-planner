@@ -3,6 +3,7 @@
 // draws caller overlays, and reports taps and drags in image pixels.
 
 import { WindowLut } from '../render/mpr';
+import { DoubleTap } from './doubleTap';
 
 export interface ImageSource {
   w: number; h: number;
@@ -23,6 +24,13 @@ export interface ImageCanvasOpts {
   /** Vertical drag / wheel steps (in image px for drags, ±1 for wheel). */
   onScroll?(delta: number, wheel: boolean): void;
   compact?: boolean;
+  /** What a double tap does (default: reset zoom and pan). */
+  onDoubleTap?(): void;
+  /**
+   * Hold a single tap back 300 ms so that a double tap does not also count as
+   * a tap. Use where a tap adds something (a nerve point, a tooth).
+   */
+  deferTap?: boolean;
 }
 
 export const OVERLAY_COLORS = [
@@ -45,6 +53,8 @@ export class ImageCanvas {
   private pointers = new Map<number, { x: number; y: number }>();
   private g: null | { kind: 'one' | 'pinch'; x0: number; y0: number; last: [number, number]; moved: boolean; captured: boolean; dist: number; zoom: number; mid: [number, number]; pan: [number, number] } = null;
   private ro: ResizeObserver;
+  private dbl = new DoubleTap();
+  private tapTimer = 0;
 
   constructor(private o: ImageCanvasOpts) {
     this.el = document.createElement('div');
@@ -59,7 +69,7 @@ export class ImageCanvas {
     if (!o.compact) this.bind();
   }
 
-  dispose(): void { this.ro.disconnect(); }
+  dispose(): void { this.ro.disconnect(); clearTimeout(this.tapTimer); }
   setImage(src: ImageSource | null): void { this.src = src; this.contentDirty = true; this.dirty = true; }
   invalidate(): void { this.dirty = true; }
   invalidateContent(): void { this.contentDirty = true; this.dirty = true; }
@@ -144,6 +154,18 @@ export class ImageCanvas {
     }
   }
 
+  private handleTap(cx: number, cy: number, ix: number, iy: number): void {
+    const custom = this.o.onDoubleTap;
+    if (this.dbl.tap(cx, cy)) {
+      clearTimeout(this.tapTimer); this.tapTimer = 0;
+      if (custom) custom(); else { this.resetView(); this.draw(); }
+      return;
+    }
+    if (!this.o.deferTap) { this.o.onTap?.(ix, iy); return; }
+    clearTimeout(this.tapTimer);
+    this.tapTimer = window.setTimeout(() => { this.tapTimer = 0; this.o.onTap?.(ix, iy); }, 300);
+  }
+
   private bind(): void {
     const el = this.canvas;
     el.style.touchAction = 'none';
@@ -188,7 +210,8 @@ export class ImageCanvas {
       if (g && g.kind === 'one') {
         const [ix, iy] = this.toImage(e.clientX, e.clientY);
         if (g.captured) this.o.onDrag?.('end', ix, iy);
-        else if (!g.moved) this.o.onTap?.(ix, iy);
+        else if (!g.moved) this.handleTap(e.clientX, e.clientY, ix, iy);
+        if (g.moved) this.dbl.clear();
       }
       this.pointers.delete(e.pointerId);
       if (!this.pointers.size) this.g = null;
@@ -200,6 +223,5 @@ export class ImageCanvas {
       if (e.ctrlKey || !this.o.onScroll) { this.zoom = Math.max(0.5, Math.min(20, this.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1))); this.dirty = true; this.draw(); }
       else this.o.onScroll(e.deltaY > 0 ? 1 : -1, true);
     }, { passive: false });
-    el.addEventListener('dblclick', () => { this.resetView(); this.draw(); });
   }
 }

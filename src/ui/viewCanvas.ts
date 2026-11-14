@@ -5,6 +5,7 @@ import type { Vec3, Volume } from '../core/volume/volume';
 import { ORIENT, ViewKind, WindowLut } from '../render/mpr';
 import { add, cross, Frame, len, planeFor, rotate, rotateFrame, samplePlane, scale, sub, volumeCenter } from '../render/oblique';
 import { dot } from '../core/volume/volume';
+import { DoubleTap } from './doubleTap';
 
 export type Tool = 'scroll' | 'window' | 'tilt' | 'measure';
 
@@ -55,9 +56,13 @@ export class ViewCanvas {
   private ro: ResizeObserver;
   private compact: boolean;
   private center: Vec3;
+  private dbl = new DoubleTap();
+  private onDoubleTap?: () => void;
 
-  constructor(readonly kind: ViewKind, private host: ViewHost, opts: { compact?: boolean } = {}) {
+  /** onDoubleTap: what a double tap does (default: reset zoom and pan). */
+  constructor(readonly kind: ViewKind, private host: ViewHost, opts: { compact?: boolean; onDoubleTap?: () => void } = {}) {
     this.compact = !!opts.compact;
+    this.onDoubleTap = opts.onDoubleTap;
     this.center = volumeCenter(host.base);
     this.el = document.createElement('div');
     this.el.className = 'view' + (this.compact ? ' compact' : '');
@@ -129,6 +134,8 @@ export class ViewCanvas {
       this.img.width = g.sw; this.img.height = g.sh;
       this.imageData = this.imgCtx.createImageData(g.sw, g.sh);
     }
+    let hasData = false;
+    for (let i = 0; i < this.buf.length; i += 7) if (this.buf[i] > -900) { hasData = true; break; }
     this.lut.set(this.host.wc, this.host.ww);
     this.lut.apply(this.buf, new Uint32Array(this.imageData.data.buffer));
     this.imgCtx.putImageData(this.imageData, 0, 0);
@@ -196,6 +203,14 @@ export class ViewCanvas {
     ctx.textAlign = 'left'; ctx.fillText(l, 10 * dpr, H / 2);
     ctx.textAlign = 'right'; ctx.fillText(r, W - 10 * dpr, H / 2);
     ctx.textAlign = 'center'; ctx.fillText(t, W / 2, 14 * dpr); ctx.fillText(b, W / 2, H - 14 * dpr);
+
+    if (!hasData) {
+      ctx.fillStyle = 'rgba(234, 240, 250, 0.75)';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `500 ${(this.compact ? 11 : 14) * dpr}px Inter, system-ui, sans-serif`;
+      ctx.fillText('Outside the scan', W / 2, H / 2 - (this.compact ? 0 : 10 * dpr));
+      if (!this.compact) ctx.fillText('Tap on the jaw in another view', W / 2, H / 2 + 12 * dpr);
+    }
 
     // Scale bar: 10 mm, or 5 / 1 mm when zoomed in.
     if (!this.compact) {
@@ -294,7 +309,12 @@ export class ViewCanvas {
     const end = (e: PointerEvent) => {
       const g = this.gesture;
       if (g && g.kind === 'drag') {
-        if (!g.moved && this.pointers.size === 1 && this.host.tool !== 'measure') this.host.setCursor(this.toWorld(e.clientX, e.clientY));
+        if (!g.moved && this.pointers.size === 1) {
+          if (this.dbl.tap(e.clientX, e.clientY)) {
+            if (this.onDoubleTap) this.onDoubleTap();
+            else { this.resetView(); this.host.setCursor(this.host.cursor); }
+          } else if (this.host.tool !== 'measure') this.host.setCursor(this.toWorld(e.clientX, e.clientY));
+        } else this.dbl.clear();
         if (g.a && g.b && len(sub(g.b, g.a)) >= 0.3) this.host.addMeasurement(g.a, g.b, this.kind);
       }
       this.pointers.delete(e.pointerId);
@@ -307,6 +327,5 @@ export class ViewCanvas {
       if (e.ctrlKey) { this.zoom = Math.max(0.5, Math.min(40, this.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1))); this.invalidate(); this.host.setCursor(this.host.cursor); }
       else this.stepAlongNormal((e.deltaY > 0 ? 1 : -1) * step());
     }, { passive: false });
-    el.addEventListener('dblclick', () => { this.resetView(); this.host.setCursor(this.host.cursor); });
   }
 }

@@ -142,7 +142,9 @@ export function renderViewer(s: AppState, c: CaseRecord, onChange: () => void, e
 
   const panel = h('aside', { class: 'side-card card' },
     h('h2', null, 'Check the scan'),
-    h('p', { class: 'muted small' }, 'Tap to line up the views. Pinch to zoom, double-tap to reset.'),
+    h('p', { class: 'muted small' }, expert.on
+      ? 'Tap to line up the views. Double-tap a view to make it big, and again to go back. Pinch to zoom.'
+      : 'Tap or double-tap a small view to make it big. Tap to line up the views. Pinch to zoom, double-tap the big view to reset.'),
     h('h3', null, 'Drag does'), toolBtns,
     h('h3', null, 'Brightness'), h('div', { class: 'chips' }, autoBtn, presetBtns),
     h('button', { class: 'btn secondary slim', onclick: () => host.setFrame(IDENTITY) }, icon('reset', 16), 'Straighten views'),
@@ -190,10 +192,22 @@ export function renderViewer(s: AppState, c: CaseRecord, onChange: () => void, e
     el = h('div', { class: 'viewer guided' }, h('div', { class: 'viewer-main' }, heroWrap, thumbRow), panel);
   } else {
     const grid = h('div', { class: 'grid4' });
+    // Double tap a view to fill the grid with it; double tap again to go back.
+    const cells = new Map<ViewKind, HTMLElement>();
+    const toggleFocus = (k: ViewKind) => {
+      const on = !cells.get(k)!.classList.contains('focused');
+      cells.forEach((c, kk) => c.classList.toggle('focused', on && kk === k));
+      grid.classList.toggle('focus', on);
+      views.get(k)!.resetView();
+      all().forEach((x) => x.invalidate());
+      schedule();
+    };
     for (const k of KINDS) {
-      const vc = new ViewCanvas(k, host);
+      const vc = new ViewCanvas(k, host, { onDoubleTap: () => toggleFocus(k) });
       views.set(k, vc);
-      grid.append(h('div', { class: 'cell', onpointerdown: () => { hero = k; } }, vc.el, h('span', { class: 'badge', style: `border-left:4px solid ${VIEW_COLOR[k]}` }, NAMES[k])));
+      const cell = h('div', { class: 'cell', onpointerdown: () => { hero = k; } }, vc.el, h('span', { class: 'badge', style: `border-left:4px solid ${VIEW_COLOR[k]}` }, NAMES[k]));
+      cells.set(k, cell);
+      grid.append(cell);
     }
     grid.append(h('div', { class: 'cell placeholder' }, h('span', null, '3D view arrives in Session 4')));
     el = h('div', { class: 'viewer expert' }, grid, panel);

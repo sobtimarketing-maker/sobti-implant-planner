@@ -55,3 +55,11 @@ Known limits
 Tests: 30 unit + e2e on the real case (suggested arch 9 points / 129 mm, 3 nerve points, foramen, tooth 415 mm³).
 
 Next: Session 4: WebGL2 3D view (volume + surfaces: teeth, nerve, later implants).
+
+## Session 3b (2026-11-14): double tap to enlarge, out-of-scan notice
+Dr's request from the tablet: double-tap a view to bring it into the big viewer.
+- `src/ui/doubleTap.ts`: own double-tap detector from pointer taps (350 ms, 40 px). WebView touch with `touch-action: none` does not fire `dblclick` reliably, so both view classes use this instead.
+- Guided layout: tap or double-tap a thumbnail makes it the big view (tap already did). Double-tap on the big view still resets zoom.
+- Expert grid: double-tap a view to fill the grid with it, double-tap again to go back to four.
+- Step 3: double-tap the panoramic or cross-section to fill the big area with it; again to show both. The cross-section holds a single tap back 300 ms (`deferTap`) so a double tap never adds a nerve point or outlines a tooth.
+- A view whose slice has no scan data (for example the sagittal when the point is outside the round scan area) now says "Outside the scan" instead of staying black.

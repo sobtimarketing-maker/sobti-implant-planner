@@ -75,6 +75,15 @@ try {
     await page.getByRole('button', { name: 'Expert grid' }).click();
     await page.waitForTimeout(400);
     await shot(page, '4-expert.png');
+    // Double tap a view to make it fill the grid, again to go back.
+    const sag = await page.locator('.grid4 .cell').nth(2).boundingBox();
+    await page.mouse.dblclick(sag.x + sag.width / 2, sag.y + sag.height / 2);
+    await page.locator('.grid4.focus .cell.focused').waitFor();
+    await page.waitForTimeout(300);
+    await shot(page, '4b-expert-focus.png');
+    const big = await page.locator('.grid4 .cell.focused').boundingBox();
+    await page.mouse.dblclick(big.x + big.width / 2, big.y + big.height / 2);
+    await page.locator('.grid4:not(.focus)').waitFor();
     // Step 3: arch, panoramic, nerve, teeth.
     await page.getByRole('button', { name: 'Arch and nerve' }).click();
     await page.getByRole('button', { name: 'Suggest arch at this level' }).click();
@@ -86,9 +95,9 @@ try {
     const cs = await page.locator('.split-b canvas').boundingBox();
     for (const fx of [0.15, 0.22, 0.3]) {
       await page.mouse.click(pano.x + pano.width * fx, pano.y + pano.height * 0.62);
-      await page.waitForTimeout(150);
+      await page.waitForTimeout(400);
       await page.mouse.click(cs.x + cs.width * 0.5, cs.y + cs.height * 0.62);
-      await page.waitForTimeout(150);
+      await page.waitForTimeout(450);
     }
     await page.getByRole('button', { name: /^Right \(3\)/ }).waitFor();
     await page.getByRole('button', { name: 'Mark foramen here' }).click();
@@ -96,9 +105,19 @@ try {
     await page.getByRole('group', { name: 'Task' }).getByRole('button', { name: 'Teeth' }).click();
     await page.mouse.click(pano.x + pano.width * 0.72, pano.y + pano.height * 0.47);
     await page.waitForTimeout(200);
+    await page.waitForTimeout(400);
     await page.mouse.click(cs.x + cs.width * 0.5, cs.y + cs.height * 0.5);
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(900);
     await shot(page, '8-teeth.png');
+    const teethBefore = await page.locator('.measure-go').count();
+    await page.mouse.dblclick(cs.x + cs.width * 0.5, cs.y + cs.height * 0.5);
+    await page.locator('.split.only-b').waitFor();
+    await page.waitForTimeout(500);
+    if (await page.locator('.measure-go').count() !== teethBefore) throw new Error('double tap also outlined a tooth');
+    await shot(page, '8b-cross-big.png');
+    const csBig = await page.locator('.split-b canvas').boundingBox();
+    await page.mouse.dblclick(csBig.x + csBig.width / 2, csBig.y + csBig.height / 2);
+    await page.locator('.split:not(.only-a):not(.only-b)').waitFor();
     console.log('Teeth message:', await page.locator('.side-card .ok-line, .side-card .warn-line').first().textContent().catch(() => 'none'));
     // Reopen from the case list: volume should come back from the cache.
     await page.getByRole('button', { name: 'Back to cases' }).click();

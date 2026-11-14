@@ -156,6 +156,8 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 
 .grid4 { flex: 1; min-width: 0; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; }
 .cell { position: relative; border-radius: 14px; overflow: hidden; background: var(--image-bg); border: 1px solid #22355A; }
+.grid4.focus { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.grid4.focus > .cell:not(.focused) { display: none; }
 .cell.placeholder { display: flex; align-items: center; justify-content: center; color: #8FA3C4; font-size: 14px; }
 
 /* Viewer tools */
@@ -175,6 +177,8 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .split { position: absolute; inset: 0; display: grid; grid-template-columns: 3fr 2fr; gap: 2px; background: #22355A; }
 .split-a, .split-b { position: relative; background: var(--image-bg); }
 .split .hero-slider { z-index: 1; }
+.split.only-a { grid-template-columns: 1fr; } .split.only-a > .split-b { display: none; }
+.split.only-b { grid-template-columns: 1fr; } .split.only-b > .split-a { display: none; }
 .hero .split + .hero-slider { left: 16px; right: 16px; }
 .thumbs.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .thumb:disabled { opacity: .6; cursor: default; }
