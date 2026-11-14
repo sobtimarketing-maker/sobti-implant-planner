@@ -55,7 +55,7 @@ export function renderScans(s: AppState, c: CaseRecord, onChange: () => void, ro
   // ---------- loading files
   const fileInputs: Record<Arch, HTMLInputElement> = { lower: fileInput('lower'), upper: fileInput('upper') };
   function fileInput(arch: Arch): HTMLInputElement {
-    const inp = h('input', { type: 'file', accept: '.stl,.obj,model/stl', hidden: true, 'aria-label': `${ARCH_NAME[arch]} scan file` }) as HTMLInputElement;
+    const inp = h('input', { type: 'file', accept: '*/*', hidden: true, 'aria-label': `${ARCH_NAME[arch]} scan file` }) as HTMLInputElement;
     inp.addEventListener('change', () => { const f = inp.files?.[0]; inp.value = ''; if (f) loadFile(arch, f); });
     return inp;
   }

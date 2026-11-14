@@ -13,9 +13,10 @@ self.onmessage = async (ev: MessageEvent<{ file: File; id: number }>) => {
   try {
     const name = file.name.toLowerCase();
     let full: TriMesh;
-    if (name.endsWith('.stl')) full = parseStl(await file.arrayBuffer());
-    else if (name.endsWith('.obj')) full = await parseObjStream(file.stream(), (n) => post({ id, type: 'progress', done: n, total: file.size }));
-    else throw new Error('Choose an .stl or .obj file.');
+    const kind = name.endsWith('.stl') ? 'stl' : name.endsWith('.obj') ? 'obj' : await sniff(file);
+    if (kind === 'stl') full = parseStl(await file.arrayBuffer());
+    else if (kind === 'obj') full = await parseObjStream(file.stream(), (n) => post({ id, type: 'progress', done: n, total: file.size }));
+    else throw new Error('This file is not a scan. Choose an .stl or .obj file from the scanner.');
     if (full.indices.length < 30) throw new Error('No surface found in this file.');
     const display = decimate(full, 40000);
     const same = display === full;
@@ -24,3 +25,16 @@ self.onmessage = async (ev: MessageEvent<{ file: File; id: number }>) => {
     post({ id, type: 'error', message: e instanceof Error ? e.message : String(e) });
   }
 };
+
+/** Tablet pickers sometimes hide the extension: look at the start of the file instead. */
+async function sniff(file: File): Promise<'stl' | 'obj' | null> {
+  const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
+  if (head.length >= 84) {
+    const n = new DataView(head.buffer).getUint32(80, true);
+    if (84 + n * 50 === file.size) return 'stl';
+  }
+  const text = new TextDecoder().decode(head);
+  if (/^\s*solid\b/.test(text) && /facet|endsolid/.test(text)) return 'stl';
+  if (/^v\s+-?[\d.]/m.test(text)) return 'obj';
+  return null;
+}
