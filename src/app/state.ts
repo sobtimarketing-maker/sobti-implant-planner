@@ -40,6 +40,7 @@ export const STEPS = [
   { label: 'Orientation', ready: true },
   { label: 'Arch and nerve', ready: true },
   { label: 'Add scans', ready: true },
+  { label: 'Design crowns', ready: true },
   { label: 'Plan implant', ready: false },
   { label: 'Report', ready: false },
 ];

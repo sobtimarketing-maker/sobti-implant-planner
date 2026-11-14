@@ -93,7 +93,11 @@ export interface CaseRecord {
   measurements: { id: string; a: Vec3; b: Vec3; view: 'axial' | 'coronal' | 'sagittal'; label?: string }[];
   /** Mouth scans (meshes are stored separately) and their fit to the CBCT. */
   scans?: CaseScans;
+  /** Crown-down design: single crowns and bridges, in world LPS mm (see core/crown/crown.ts). */
+  prosthetic?: { spans: CrownSpan[] };
 }
+
+import type { CrownSpan } from '../crown/crown';
 
 export interface ScanFileInfo { name: string; vertices: number; faces: number }
 export interface CaseScans {

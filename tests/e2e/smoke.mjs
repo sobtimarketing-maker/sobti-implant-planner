@@ -198,6 +198,26 @@ try {
       await page.getByRole('button', { name: 'Check on the coronal slice' }).click();
       await page.waitForTimeout(800);
       await shot(page, '13-scan-coronal.png');
+      // Step 5: crown design from contact points.
+      await page.getByRole('button', { name: 'Design crowns' }).click();
+      await page.locator('.hero canvas').first().waitFor();
+      await page.waitForTimeout(1500);
+      await shot(page, '14-crowns-pick.png');
+      const cb = await page.locator('.hero canvas').first().boundingBox();
+      const CONTACTS = JSON.parse(process.env.CONTACTS || '[[0.3,0.5],[0.2,0.5]]');
+      for (const [x, y] of CONTACTS) { await page.mouse.click(cb.x + cb.width * x, cb.y + cb.height * y); await page.waitForTimeout(600); }
+      await page.locator('.side-card').getByText(/placed|too close/).waitFor({ timeout: 30000 });
+      console.log('Crown:', await page.locator('.side-card .ok-line, .side-card .warn-line').last().textContent());
+      await page.waitForTimeout(1200);
+      await shot(page, '15-crown-cheek.png');
+      await page.getByRole('group', { name: 'Look from' }).getByRole('button', { name: 'Bite' }).click();
+      await page.waitForTimeout(1200);
+      await shot(page, '16-crown-bite.png');
+      await page.getByRole('button', { name: 'Height +' }).click();
+      await page.getByRole('button', { name: 'Bite colours' }).click();
+      await page.getByRole('group', { name: 'Look from' }).getByRole('button', { name: 'Tongue' }).click();
+      await page.waitForTimeout(1200);
+      await shot(page, '17-crown-tongue.png');
     }
     // Reopen from the case list: volume should come back from the cache.
     await page.getByRole('button', { name: 'Back to cases' }).click();

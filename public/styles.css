@@ -259,3 +259,12 @@ body[data-mode="patient"] .readout, body[data-mode="patient"] .tech, body[data-m
 .warn-text { color: #C2410C; font-weight: 600; }
 .nudge { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-top: 8px; }
 .nudge > .muted { width: 100%; }
+/* Design crowns */
+.tune { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.tune-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: center; }
+.tune-label { font-size: 14px; font-weight: 600; color: var(--navy); }
+.tune-value { font-size: 13px; color: var(--muted); min-width: 64px; text-align: right; }
+.tune-row .chip { min-width: 48px; min-height: 44px; padding: 0 10px; font-size: 14px; }
+.unit-row { width: 100%; border: 1px solid var(--line); background: var(--white); border-radius: 12px; min-height: 48px; text-align: left; gap: 10px; }
+.unit-row.on { border-color: var(--royal); box-shadow: 0 0 0 2px rgba(42,92,255,.15); }
+.view-pick { margin: 6px 0; }

@@ -97,3 +97,18 @@ Tried and dropped
 - Point-to-point ICP alone: stalls about 1 mm off on smooth surfaces (unit test shows it); point-to-plane fixes it.
 
 Next (Session 6): crown library and occlusion on the lined-up scans.
+
+## Session 6: crown design (crown-down)
+
+Built (step 5 "Design crowns", `src/ui/screens/crowns.ts`; core in `src/core/crown/crown.ts`)
+- New step between "Add scans" and "Plan implant". Needs the lined-up scan of the implant jaw.
+- Tap the mesial contact point, then the distal one (on the neighbouring tooth, or on the ridge for a free end). Teeth for the gap come from the planned sites in that quadrant (else guessed from the gap length); split by typical tooth widths. More than one tooth = bridge.
+- Crowns are our own parametric shapes per tooth kind (molar, premolar, canine, incisor): superellipse side wall with cervical narrowing and height of contour, occlusal cap with cusps, grooves, fossa and marginal ridges. Closed, outward-facing meshes (unit test checks signed volume) so they can feed the guide and STL steps.
+- Frame per span: m along the contact line, o = occlusal axis of the jaw scan (thinnest axis of the arch, towards the opposing scan, kept within 35° of up/down), b = o × m; buccal side from the scan centroid. World = origin + x·m + y·b + z·o.
+- Seat: ray down from above the contact line onto the jaw scan (gum), 0.3 mm under it. Height: raised or lowered until the highest cusp meets the opposing scan at the chosen bite gap. "Grinding to bite" pushes any point that would go into the opposing teeth back to the bite gap; the panel warns when more than 0.4 mm is ground (little room).
+- Bite colours per vertex: red touching, yellow to green within 1 mm, ivory clear. Views: cheek, bite (opposing hidden), tongue.
+- Fine-tune per crown: width, cheek-tongue size, height, turn (2°), shift cheek/tongue and front/back (0.2 mm), bite (0.05 mm, firmer or lighter), refit, first tooth number and number of teeth in the gap, redo points, remove.
+- Stored in `case.prosthetic.spans` (world mm; unit origins kept so later steps work without the scans loaded).
+- Real case: 46-47 bridge placed on the right lower ridge, meets the upper teeth with point contacts.
+
+Next (Session 7): implants under the crowns, with nerve and neighbour distance checks.
