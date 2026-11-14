@@ -34,7 +34,10 @@ export class ViewCanvas {
   private dirty = true;
   private ro: ResizeObserver;
 
+  private compact: boolean;
+
   constructor(readonly kind: ViewKind, private host: ViewHost, opts: { compact?: boolean } = {}) {
+    this.compact = !!opts.compact;
     this.el = document.createElement('div');
     this.el.className = 'view' + (opts.compact ? ' compact' : '');
     this.canvas = document.createElement('canvas');
@@ -100,7 +103,7 @@ export class ViewCanvas {
     // Orientation letters
     const [l, r, t, b] = ORIENT[this.kind];
     ctx.fillStyle = 'rgba(234, 240, 250, 0.85)';
-    ctx.font = `600 ${13 * dpr}px Inter, system-ui, sans-serif`;
+    ctx.font = `600 ${(this.compact ? 10 : 13) * dpr}px Inter, system-ui, sans-serif`;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left'; ctx.fillText(l, 10 * dpr, H / 2);
     ctx.textAlign = 'right'; ctx.fillText(r, W - 10 * dpr, H / 2);
@@ -109,7 +112,7 @@ export class ViewCanvas {
     // Scale bar (10 mm)
     const mmPx = g.sx / s.pxW;
     const bar = 10 * mmPx;
-    if (bar > 20 && bar < W * 0.6) {
+    if (!this.compact && bar > 20 && bar < W * 0.6) {
       const x0 = W - 16 * dpr - bar, y0 = 40 * dpr;
       ctx.strokeStyle = '#EAF0FA';
       ctx.lineWidth = 2 * dpr;

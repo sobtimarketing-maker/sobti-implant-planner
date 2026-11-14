@@ -17,7 +17,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { background: var(--ivory); color: var(--navy); font: 15px/1.4 var(--font-ui); -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
-#app { height: 100%; }
+#app { height: 100%; padding-top: env(safe-area-inset-top, 0); padding-bottom: env(safe-area-inset-bottom, 0); }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 h2 { font-size: 17px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
@@ -169,10 +169,19 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .workspace.navy .segmented button { color: #C9D6EA; }
 .workspace.navy .segmented button.on { background: #22477E; color: #fff; }
 .workspace.navy .brand-name { color: #fff; }
+.workspace.navy select { background: #13325F; border-color: #22477E; color: #EAF0FA; }
+.workspace.navy select option { background: #13325F; color: #EAF0FA; }
 .workspace.navy .readout dt, .workspace.navy .tech dt { color: #A9BBD8; }
 
 /* Patient view hides technical numbers */
 body[data-mode="patient"] .readout, body[data-mode="patient"] .tech, body[data-mode="patient"] .device-pill { display: none; }
+
+/* Tablets around 1280 px: keep the header on one line */
+@media (max-width: 1400px) {
+  .topbar .brand-text { display: none; }
+  .tier-pick .muted { display: none; }
+  .side-card { width: 280px; }
+}
 
 /* Phones and small tablets: stack */
 @media (max-width: 900px) {
