@@ -47,7 +47,15 @@ export class View3D {
   private moving = false;
   private refineTimer = 0;
   private pointers = new Map<number, { x: number; y: number }>();
-  private g: null | { kind: 'one' | 'two' | 'paint'; x0: number; y0: number; last: [number, number]; moved: boolean; dist: number; mid: [number, number]; cam: Camera } = null;
+  private g: null | { kind: 'one' | 'two' | 'paint'; x0: number; y0: number; last: [number, number]; moved: boolean; dist: number; mid: [number, number]; cam: Camera; ang?: number; started?: boolean } = null;
+  private paintTimer = 0;
+  private startPaint(): void {
+    clearTimeout(this.paintTimer); this.paintTimer = 0;
+    const g = this.g;
+    if (!g || g.kind !== 'paint' || g.started || this.pointers.size !== 1) return;
+    g.started = true;
+    this.host.paint?.('start', this.surfaceAt(g.last[0], g.last[1]));
+  }
   private dbl = new DoubleTap();
   private ro: ResizeObserver;
   private bar: HTMLElement | null = null;
@@ -175,15 +183,16 @@ export class View3D {
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       const cam = { ...this.cam, target: [...this.cam.target] as Vec3 };
       if (this.pointers.size === 1 && this.host.painting?.() && this.host.paint) {
-        this.g = { kind: 'paint', x0: e.clientX, y0: e.clientY, last: [e.clientX, e.clientY], moved: true, dist: 0, mid: [0, 0], cam };
-        this.host.paint('start', this.surfaceAt(e.clientX, e.clientY));
+        // Wait a moment before painting, so a second finger (turn / zoom) never leaves a mark.
+        this.g = { kind: 'paint', x0: e.clientX, y0: e.clientY, last: [e.clientX, e.clientY], moved: true, dist: 0, mid: [0, 0], cam, started: false };
+        this.paintTimer = window.setTimeout(() => this.startPaint(), 140);
         return;
       }
-      if (this.pointers.size === 2 && this.g?.kind === 'paint') this.host.paint?.('end', null);
+      if (this.pointers.size === 2 && this.g?.kind === 'paint') { clearTimeout(this.paintTimer); this.paintTimer = 0; if (this.g.started) this.host.paint?.('end', null); }
       if (this.pointers.size === 1) this.g = { kind: 'one', x0: e.clientX, y0: e.clientY, last: [e.clientX, e.clientY], moved: false, dist: 0, mid: [0, 0], cam };
       else if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()];
-        this.g = { kind: 'two', x0: 0, y0: 0, last: [0, 0], moved: true, dist: Math.hypot(a.x - b.x, a.y - b.y), mid: [(a.x + b.x) / 2, (a.y + b.y) / 2], cam };
+        this.g = { kind: 'two', x0: 0, y0: 0, last: [0, 0], moved: true, dist: Math.hypot(a.x - b.x, a.y - b.y), mid: [(a.x + b.x) / 2, (a.y + b.y) / 2], cam, ang: Math.atan2(b.y - a.y, b.x - a.x) };
       }
     });
     el.addEventListener('pointermove', (e) => {
@@ -195,12 +204,17 @@ export class View3D {
         const d = Math.hypot(a.x - b.x, a.y - b.y);
         const mid = [(a.x + b.x) / 2, (a.y + b.y) / 2];
         const dist = Math.max(20, Math.min(2000, g.cam.dist * (g.dist / Math.max(1, d))));
-        this.cam = { ...g.cam, dist, target: this.panned(g.cam, mid[0] - g.mid[0], mid[1] - g.mid[1]) };
+        // Twisting two fingers turns the model around the screen axis (yaw), so the view can turn while a tool is active.
+        let da = Math.atan2(b.y - a.y, b.x - a.x) - (g.ang ?? 0);
+        while (da > Math.PI) da -= 2 * Math.PI; while (da < -Math.PI) da += 2 * Math.PI;
+        this.cam = { ...g.cam, dist, yaw: g.cam.yaw - da, target: this.panned(g.cam, mid[0] - g.mid[0], mid[1] - g.mid[1]) };
         this.moving = true; this.invalidate(); this.draw();
         return;
       }
       if (g.kind === 'paint') {
         if (this.pointers.size !== 1) return;
+        g.last = [e.clientX, e.clientY];
+        if (!g.started) { if (Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 6) return; this.startPaint(); }
         this.paintQ = [e.clientX, e.clientY];
         if (!this.paintRaf) this.paintRaf = requestAnimationFrame(() => { this.paintRaf = 0; const q = this.paintQ; if (q && this.g?.kind === 'paint') this.host.paint?.('move', this.surfaceAt(q[0], q[1])); });
         return;
@@ -216,7 +230,11 @@ export class View3D {
       const g = this.g;
       if (g?.kind === 'paint') {
         this.pointers.delete(e.pointerId);
-        if (!this.pointers.size) { this.g = null; this.host.paint?.('end', null); }
+        if (!this.pointers.size) {
+          const tap = !g.started; clearTimeout(this.paintTimer); this.paintTimer = 0;
+          if (tap) { g.started = true; this.host.paint?.('start', this.surfaceAt(g.last[0], g.last[1])); }
+          this.g = null; this.host.paint?.('end', null);
+        }
         return;
       }
       if (g && g.kind === 'one' && !g.moved && this.pointers.size === 1) {
@@ -231,7 +249,7 @@ export class View3D {
       }
     };
     el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', (e) => { this.pointers.delete(e.pointerId); if (this.g?.kind === 'paint') this.host.paint?.('end', null); this.g = null; if (this.moving) { this.moving = false; this.invalidate(); this.draw(); } });
+    el.addEventListener('pointercancel', (e) => { this.pointers.delete(e.pointerId); clearTimeout(this.paintTimer); this.paintTimer = 0; if (this.g?.kind === 'paint' && this.g.started) this.host.paint?.('end', null); this.g = null; if (this.moving) { this.moving = false; this.invalidate(); this.draw(); } });
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
       this.cam = { ...this.cam, dist: Math.max(20, Math.min(2000, this.cam.dist * (e.deltaY > 0 ? 1.1 : 1 / 1.1))) };

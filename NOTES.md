@@ -133,3 +133,4 @@ Dr asked for a general smoothing / sculpt tool instead of only virtual extractio
 - `View3D` paint mode: host `painting()` / `paint(phase, point)`; one finger paints (rAF-coalesced), two fingers still turn/zoom/move.
 - Entry: Design crowns → "Edit the scan (smooth, cut, take a tooth out)". The old extraction list / put back is gone (Start again from the original replaces it).
 - Headless e2e (software GL): ~50 ms per brush move incl. re-upload of the 300K-face mesh; a tablet GPU should be faster. If strokes feel slow on the tablet, next step is partial buffer updates.
+- 6d fix (Dr: "scan is not moving" while editing): editor now has "Turn the scan / Use the tool" switch (one finger turns in Turn mode); picking a tool switches back. Painting starts only after 6 px movement or 140 ms, so a second finger arriving cancels cleanly with no mark; a quick tap still dabs. Two-finger twist now also turns (yaw) in every 3D view.

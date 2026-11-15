@@ -267,6 +267,17 @@ try {
       await page.getByRole('button', { name: 'Redo' }).click();
       await page.waitForTimeout(800);
       await shot(page, '22-edit-closed.png');
+      // Turn mode: one finger turns the scan and leaves it unchanged.
+      const undoBefore = await page.getByRole('button', { name: /^Undo/ }).first().isEnabled().catch(() => null);
+      await page.getByRole('button', { name: 'Turn the scan' }).click();
+      const hash = async () => page.locator('.hero canvas').first().screenshot().then((b) => b.length);
+      const h0 = await hash();
+      await stroke([[0.4, 0.5], [0.6, 0.55]]);
+      const h1 = await hash();
+      await shot(page, '22b-edit-turned.png');
+      if (h0 === h1) throw new Error('Turn the scan: view did not move');
+      console.log('Turn the scan: view moved, undo state', undoBefore);
+      await page.getByRole('button', { name: 'Use the tool' }).click();
       await page.getByRole('button', { name: 'Save scan' }).click();
       await page.locator('.side-card').getByText(/Scan saved|could not be saved/).waitFor({ timeout: 60000 });
       console.log('Editor:', await page.locator('.side-card .ok-line, .side-card .warn-line').last().textContent());

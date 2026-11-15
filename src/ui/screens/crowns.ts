@@ -312,7 +312,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     else lookAt('cheek');
     schedule();
   }
-  const badgeText = () => pick === 'edit' ? 'One finger works on the scan. Two fingers turn and zoom.' : pick === 'mesial' ? 'Tap the contact point on the tooth in front of the gap (mesial)'
+  const badgeText = () => pick === 'edit' ? (editor?.moveView ? 'One finger turns the scan. Two fingers zoom and move.' : 'One finger uses the tool. Two fingers zoom, move and twist.') : pick === 'mesial' ? 'Tap the contact point on the tooth in front of the gap (mesial)'
     : pick === 'distal' ? 'Now tap the contact point on the tooth behind the gap (distal)'
     : 'Tap a crown to choose it. Drag to turn, pinch to zoom.';
 

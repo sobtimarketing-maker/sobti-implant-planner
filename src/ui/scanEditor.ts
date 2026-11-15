@@ -57,6 +57,8 @@ export class ScanEditor {
   strength = 1;
   protect = true;
   showChanges = false;
+  /** Turn mode: one finger turns the scan instead of using the tool. */
+  moveView = false;
   message = '';
   busy = '';
   private undo: { pos: Float32Array; idx: Uint32Array }[] = [];
@@ -90,7 +92,7 @@ export class ScanEditor {
   }
 
   // ---------- painting
-  painting(): boolean { return !this.busy; }
+  painting(): boolean { return !this.busy && !this.moveView; }
   paint(phase: 'start' | 'move' | 'end', w: Vec3 | null): void {
     const r = SIZES[this.size].r;
     if (phase === 'end') {
@@ -199,7 +201,7 @@ export class ScanEditor {
   }
 
   setTool(t: EditTool): void {
-    this.tool = t; this.message = '';
+    this.tool = t; this.message = ''; this.moveView = false;
     if (t !== 'cut' && t !== 'tooth' && this.e.selectedCount()) this.e.clearSelection();
     if (t !== 'tooth') this.toothTap = null;
     this.host.panel(); this.host.redraw();
@@ -245,7 +247,12 @@ export class ScanEditor {
   panelBody(): HTMLElement[] {
     const t = TOOLS.find((x) => x.id === this.tool)!;
     const out: HTMLElement[] = [];
-    out.push(h('p', { class: 'muted small' }, 'One finger works on the scan, two fingers turn and zoom.'));
+    out.push(h('div', { class: 'segmented move-pick', role: 'group', 'aria-label': 'What one finger does' },
+      h('button', { class: this.moveView ? 'on' : '', 'aria-pressed': String(this.moveView), onclick: () => { this.moveView = true; this.brushAt = null; this.host.panel(); this.host.redraw(); } }, 'Turn the scan'),
+      h('button', { class: this.moveView ? '' : 'on', 'aria-pressed': String(!this.moveView), onclick: () => { this.moveView = false; this.host.panel(); } }, 'Use the tool')));
+    out.push(h('p', { class: 'muted small' }, this.moveView
+      ? 'One finger turns the scan. Two fingers zoom and move. Tap "Use the tool" or pick a tool to work again.'
+      : 'One finger uses the tool. Two fingers zoom, move and twist to turn. For a full turn, tap "Turn the scan".'));
     out.push(h('div', { class: 'tool-grid', role: 'group', 'aria-label': 'Scan tool' }, TOOLS.map((x) => h('button', { class: `tool-btn${x.id === this.tool ? ' on' : ''}`, 'aria-pressed': String(x.id === this.tool), onclick: () => this.setTool(x.id) }, x.label))));
     out.push(h('p', { class: 'tool-help' }, t.help));
     if (['smooth', 'add', 'remove', 'flatten', 'cut'].includes(this.tool)) {
