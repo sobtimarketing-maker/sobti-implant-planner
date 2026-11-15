@@ -18,23 +18,19 @@ import { sphereMesh } from '../../render/vr/shapes';
 import { h, icon } from '../dom';
 import { View3D } from '../view3d';
 import { onScansChanged, scanMeshes, setScanMesh } from '../scanCache';
-import { removeAndFill, selectTooth, ToothPick } from '../../core/mesh/extract';
-import { decimate } from '../../core/mesh/decimate';
-import { apply, inverseRigid } from '../../core/register/rigid';
+import { ScanEditor } from '../scanEditor';
 import { PointGrid, toothSurfacePoints } from '../../core/register/icp';
-import { getScan, putScan, StoredScan } from '../../core/store/db';
+import { getScan, putScan } from '../../core/store/db';
 import { toothGrow } from '../../core/segment/toothGrow';
 import { maskAt } from '../../core/segment/regionGrow';
 import { sampleWorld } from '../../render/oblique';
 
 type Arch = 'upper' | 'lower';
-type Pick = 'idle' | 'mesial' | 'distal' | 'extract';
+type Pick = 'idle' | 'mesial' | 'distal' | 'edit';
 export interface CrownsHandle { el: HTMLElement; dispose(): void; refresh(): void }
 
 const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const scale = (a: Vec3, s: number): Vec3 => [a[0] * s, a[1] * s, a[2] * s];
-const sub3 = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const norm3 = (a: Vec3): Vec3 => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 const dist2 = (a: Vec3, b: Vec3) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
 
 export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): CrownsHandle {
@@ -158,13 +154,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
   }
 
   // ---------- virtual extraction (scan mm; the untouched scan is kept as '<arch>:orig')
-  let ext: { pick: ToothPick; world: Vec3; preview: Uint8Array } | null = null;
-  let busy = '';
-  /** After an extraction: show the closed socket close up. */
-  let focus: Vec3 | null = null;
-  const origs = new Map<Arch, StoredScan>();
-  const toScan = (p: Vec3): Vec3 => apply(inverseRigid(sc!.m!), p);
-  const dirToScan = (d: Vec3): Vec3 => { const a = toScan([0, 0, 0]), b = toScan(d); return [b[0] - a[0], b[1] - a[1], b[2] - a[2]]; };
+  const busy = '';
   /**
    * Tooth tests from the CBCT for one tap: `mine` = on the tapped tooth (its
    * crown outlined in the CBCT, separate from the neighbours), `other` = on
@@ -189,70 +179,50 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     };
     return { mine: (i) => near(W(i)), other: (i) => onTooth(i) && !near(W(i)) };
   }
-  function previewExtract(world: Vec3, radius: number) {
-    const tm = meshes.get(treating())!;
-    const pick: ToothPick = { seed: toScan(world), o: dirToScan(occl), radius };
-    const preview = selectTooth(tm.display, pick, toothTests(tm.display, world, treating()).mine);
-    ext = { pick, world, preview };
-    message = preview.some((x) => x) ? '' : 'No tooth found there. Tap on the crown of the tooth.';
-  }
-  async function applyExtractions(arch: Arch, list: { seed: Vec3; radius: number }[]): Promise<void> {
-    let orig = origs.get(arch) ?? await getScan(c.id, `${arch}:orig`).catch(() => undefined);
-    const firstEdit = !orig;
-    if (!orig) orig = meshes.get(arch)!;
-    origs.set(arch, orig);
-    let full = orig.full;
-    for (const e of list) {
-      const world = apply(sc!.m!, e.seed);
-      const tests = toothTests(full, world, arch), o = dirToScan(arch === treating() ? occl : scale(occl, -1));
-      const sel = selectTooth(full, { seed: e.seed, o, radius: e.radius }, tests.mine);
-      full = removeAndFill(full, sel, o, 0.4, tests.other);
-    }
-    const stored: StoredScan = list.length ? { full, display: decimate(full, 40000) } : orig;
-    setScanMesh(c.id, arch, stored);
-    // Save in the background; the screen moves on straight away.
-    const o0 = orig;
-    void (async () => {
-      try {
-        if (firstEdit && list.length) await putScan(c.id, `${arch}:orig`, o0);
-        await putScan(c.id, arch, stored);
-        if (!list.length) { await putScan(c.id, `${arch}:orig`, null); origs.delete(arch); }
-      } catch { message = 'The changed scan could not be saved on this device (storage full?). It is shown for now.'; updatePanel(); }
-    })();
-  }
-  function confirmExtract() {
-    if (!ext || !sc) return;
-    const e = { id: newId(), arch: treating(), seed: ext.pick.seed, radius: ext.pick.radius };
-    busy = 'Taking the tooth out of the scan…'; updatePanel();
-    setTimeout(async () => {
-      try {
-        const list = [...(sc.extracted ?? []).filter((x) => x.arch === e.arch), e];
-        await applyExtractions(e.arch, list);
-        sc.extracted = [...(sc.extracted ?? []), e];
-        message = 'Tooth taken out of the scan and the gum closed over. Crowns and the guide use this scan from now on.';
-      } catch { message = 'Could not change the scan on this device.'; }
-      focus = ext?.world ?? null; showOpp = false; showBite = false;
-      busy = ''; ext = null; pick = 'idle'; save(); mount(); updatePanel();
-    }, 30);
-  }
-  function putBack(id: string) {
-    if (!sc?.extracted) return;
-    const e = sc.extracted.find((x) => x.id === id);
-    if (!e) return;
-    busy = 'Putting the tooth back…'; updatePanel();
-    setTimeout(async () => {
-      try {
-        const rest = sc.extracted!.filter((x) => x.id !== id);
-        await applyExtractions(e.arch, rest.filter((x) => x.arch === e.arch));
-        sc.extracted = rest;
-        message = 'Tooth put back on the scan.';
-      } catch { message = 'Could not change the scan on this device.'; }
-      busy = ''; save(); mount(); updatePanel();
-    }, 30);
+  // ---------- scan editor (the untouched scan is kept as '<arch>:orig')
+  let editor: ScanEditor | null = null;
+  let editArch: Arch = treating();
+  let teethGridCache: { key: string; g: PointGrid | null } | null = null;
+  function openEditor(arch: Arch) {
+    const ms = meshes.get(arch);
+    if (!ms || !sc?.m) return;
+    editArch = arch;
+    const towards = arch === treating() ? occl : scale(occl, -1);
+    editor = new ScanEditor({
+      arch, scan: ms, m: sc.m, towards, showNumbers,
+      toothTests: (m, w) => toothTests(m, w, arch),
+      teethGrid: () => {
+        const key = `${arch}:${geoKey}`;
+        if (teethGridCache?.key !== key) {
+          // CBCT tooth surface along the whole jaw: centres every ~200th scan vertex.
+          const P = ms.display.positions, M = sc.m!, centres: Vec3[] = [];
+          for (let i = 0; i < P.length / 3; i += 200) { const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2]; centres.push([M[0] * x + M[4] * y + M[8] * z + M[12], M[1] * x + M[5] * y + M[9] * z + M[13], M[2] * x + M[6] * y + M[10] * z + M[14]]); }
+          const pts = toothSurfacePoints(v, 800, 1500, centres, 6);
+          teethGridCache = { key, g: pts.length > 300 ? new PointGrid(pts, 1) : null };
+        }
+        return teethGridCache.g;
+      },
+      original: async () => (await getScan(c.id, `${arch}:orig`).catch(() => undefined)) ?? null,
+      redraw: () => { hero?.invalidate(); schedule(); },
+      panel: () => updatePanel(),
+      save: async (stored, current) => {
+        const hadOrig = await getScan(c.id, `${arch}:orig`).catch(() => undefined);
+        setScanMesh(c.id, arch, stored);
+        try {
+          if (!hadOrig) await putScan(c.id, `${arch}:orig`, current);
+          await putScan(c.id, arch, stored);
+          message = 'Scan saved. Crowns and the guide use the edited scan; the original is kept.';
+        } catch { message = 'The edited scan could not be saved on this device (storage full?). It is shown for now.'; }
+      },
+      close: () => { editor = null; pick = 'idle'; showOpp = true; mount(); updatePanel(); },
+    });
+    pick = 'edit'; showOpp = false; message = '';
+    mount(); updatePanel();
   }
 
   // ---------- tap handling
   const pickScan = (ro: Vec3, rd: Vec3): number => {
+    if (pick === 'edit' && editor) return editor.ray(ro, rd);
     const tm = meshes.get(treating());
     let best = tm && sc?.m ? rayMesh(tm.display, ro, rd, sc.m) : Infinity;
     if (pick === 'idle') for (const sp of pr.spans) sp.units.forEach((_, i) => { best = Math.min(best, rayMesh(crown(sp, i).b.mesh, ro, rd)); });
@@ -260,7 +230,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     return best;
   };
   function tapped(p: Vec3) {
-    if (pick === 'extract') { previewExtract(p, ext?.pick.radius ?? 5.5); hero?.invalidate(); schedule(); updatePanel(); return; }
+    if (pick === 'edit') return;
     if (pick === 'mesial') { pendingMesial = p; pick = 'distal'; message = ''; }
     else if (pick === 'distal' && pendingMesial) { placeSpan(pendingMesial, p); pendingMesial = null; mount(); }
     else {
@@ -281,15 +251,9 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
   function surfaces(): SceneSurface[] {
     const out: SceneSurface[] = [];
     if (!geometry()) return out;
+    if (pick === 'edit' && editor) return editor.surfaces([0.9, 0.72, 0.74]);
     for (const [arch, ms] of meshes) {
       if (arch !== treating() && (!showOpp || pick !== 'idle')) continue;
-      if (arch === treating() && ext && pick === 'extract') {
-        const sel = ext.preview, n = sel.length, col = new Uint8Array(n * 3);
-        for (let i = 0; i < n; i++) { const on = sel[i]; col[i * 3] = on ? 235 : 230; col[i * 3 + 1] = on ? 70 : 184; col[i * 3 + 2] = on ? 80 : 189; }
-        const key = `extract:${ext.pick.seed.map((x) => x.toFixed(2)).join(',')}:${ext.pick.radius}`;
-        out.push({ key, color: [1, 1, 1], mesh: () => ({ ...ms.display, colors: col }), model: sc!.m, vertexColors: true });
-        continue;
-      }
       out.push({ key: `scan:${c.id}:${arch}:${ms.display.indices.length}`, color: arch === treating() ? [0.9, 0.72, 0.74] : [0.66, 0.78, 0.92], mesh: () => ms.display, model: sc!.m });
     }
     for (const sp of pr.spans) sp.units.forEach((_, i) => {
@@ -310,7 +274,6 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
   let hero: View3D | null = null;
   const heroArea = h('div', { class: 'hero is3d' });
   function homeView(): { center: Vec3; size: number } {
-    if (focus && pick === 'idle') return { center: focus, size: 24 };
     const sp = selSpan();
     if (sp && pick === 'idle') { const u = sp.units[Math.min(sel!.unit, sp.units.length - 1)]; return { center: add(u.origin, scale(sp.o, u.height / 2)), size: 26 + 8 * (sp.units.length - 1) }; }
     return { center: add(archCentre, scale(occl, 4)), size: 70 };
@@ -322,7 +285,6 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     hero.draw();
   }
   function lookAt(which: 'bite' | 'cheek' | 'tongue' | 'front') {
-    focus = null;
     const sp = selSpan();
     const o = sp?.o ?? occl;
     if (which === 'bite') { showOpp = false; lookFrom(o); }
@@ -342,15 +304,15 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
     geometry();
     heroArea.classList.add('is3d');
     hero = new View3D({
-      base: v, volume: () => showCt, cursor: () => null, home: homeView, surfaces, pickSurface: pickScan, setCursor: tapped,
+      base: v, volume: () => showCt && pick !== 'edit', cursor: () => null, home: homeView, surfaces, pickSurface: pickScan, setCursor: tapped,
+      painting: () => pick === 'edit' && !!editor?.painting(), paint: (ph, p) => editor?.paint(ph, p),
     }, { label: 'Crown design in 3D', bar: false });
     heroArea.replaceChildren(hero.el, h('span', { class: 'badge' }, badgeText()));
     if (pick !== 'idle') lookFrom(add(scale(occl, 0.85), [0, -0.5, 0]));
-    else if (focus) { const d = add(scale(occl, 0.8), scale(norm3(sub3(focus, archCentre)), 0.6)); lookFrom(norm3(d)); }
     else lookAt('cheek');
     schedule();
   }
-  const badgeText = () => pick === 'extract' ? 'Tap the tooth to take out of the scan' : pick === 'mesial' ? 'Tap the contact point on the tooth in front of the gap (mesial)'
+  const badgeText = () => pick === 'edit' ? 'One finger works on the scan. Two fingers turn and zoom.' : pick === 'mesial' ? 'Tap the contact point on the tooth in front of the gap (mesial)'
     : pick === 'distal' ? 'Now tap the contact point on the tooth behind the gap (distal)'
     : 'Tap a crown to choose it. Drag to turn, pinch to zoom.';
 
@@ -374,30 +336,24 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
       return;
     }
     body.push(h('p', { class: 'muted small' }, 'Crown first, implant after: the implant is planned under the crown. Tap the contact points on the teeth either side of the gap.'));
-    if (pick === 'extract') {
-      body.push(h('h3', null, 'Take a tooth out'),
-        h('p', { class: 'muted small' }, 'Tap the tooth to extract. It turns red; check that only that tooth is red, then take it out. The gum is closed over the hole.'));
-      if (ext && ext.preview.some((x) => x)) {
-        const r = ext.pick.radius;
-        body.push(stepRow('Area', showNumbers ? `${(r * 2).toFixed(0)} mm` : '', () => { previewExtract(ext!.world, Math.max(3, r - 0.5)); }, () => { previewExtract(ext!.world, Math.min(9, r + 0.5)); }, 'Smaller', 'Larger'),
-          h('button', { class: 'btn primary', disabled: !!busy, onclick: confirmExtract }, 'Take this tooth out'));
-      }
-      body.push(h('button', { class: 'btn secondary', disabled: !!busy, onclick: () => { pick = 'idle'; ext = null; message = ''; mount(); updatePanel(); } }, 'Cancel'));
+    if (pick === 'edit' && editor) {
+      const both = meshes.has('upper') && meshes.has('lower');
+      panel.replaceChildren(h('h2', null, 'Edit the scan'),
+        both ? h('div', { class: 'segmented small', role: 'group', 'aria-label': 'Scan to edit' }, (['lower', 'upper'] as Arch[]).map((a) => h('button', { class: editArch === a ? 'on' : '', onclick: () => { if (editArch !== a && !editor?.dirty) openEditor(a); } }, a === 'lower' ? 'Lower scan' : 'Upper scan'))) : h('span'),
+        ...editor.panelBody(),
+        message ? h('div', { class: 'ok-line small' }, message) : h('span'));
+      return;
     } else if (pick !== 'idle') {
       body.push(h('div', { class: 'ok-line small' }, pick === 'mesial' ? '1. Tap the mesial contact point (tooth in front of the gap).' : '2. Tap the distal contact point (tooth behind the gap).'),
         h('button', { class: 'btn secondary', onclick: () => { pick = 'idle'; pendingMesial = null; mount(); updatePanel(); } }, 'Cancel'));
     } else {
-      body.push(h('button', { class: 'btn primary', onclick: () => { pick = 'mesial'; pendingMesial = null; message = ''; focus = null; mount(); updatePanel(); } }, icon('plus', 18), pr.spans.length ? 'Add another crown or bridge' : 'Add a crown or bridge'),
-        h('button', { class: 'btn secondary', onclick: () => { pick = 'extract'; ext = null; message = ''; mount(); updatePanel(); } }, icon('tooth', 18), 'Take a tooth out of the scan'));
-      const exts = (sc.extracted ?? []);
-      if (exts.length) body.push(h('div', { class: 'pair-list' }, exts.map((e, i) => h('div', { class: 'pair-row' },
-        h('span', null, `Extracted ${i + 1} (${e.arch} scan)`),
-        h('button', { class: 'btn secondary small', disabled: !!busy, onclick: () => putBack(e.id) }, 'Put back')))));
+      body.push(h('button', { class: 'btn primary', onclick: () => { pick = 'mesial'; pendingMesial = null; message = ''; mount(); updatePanel(); } }, icon('plus', 18), pr.spans.length ? 'Add another crown or bridge' : 'Add a crown or bridge'),
+        h('button', { class: 'btn secondary', onclick: () => openEditor(treating()) }, icon('tooth', 18), 'Edit the scan (smooth, cut, take a tooth out)'));
     }
     if (pr.spans.length) {
       body.push(h('h3', null, 'Crowns'), h('div', { class: 'pair-list' }, pr.spans.flatMap((sp) => sp.units.map((u, i) => h('button', {
         class: `pair-row unit-row${sel?.span === sp.id && sel.unit === i ? ' on' : ''}`,
-        onclick: () => { sel = { span: sp.id, unit: i }; pick = 'idle'; focus = null; mount(); updatePanel(); },
+        onclick: () => { sel = { span: sp.id, unit: i }; pick = 'idle'; mount(); updatePanel(); },
       }, h('strong', null, String(u.fdi)), h('span', null, `${KIND_LABEL[kindOf(u.fdi)]}${sp.units.length > 1 ? ` · bridge ${sp.units.map((x) => x.fdi).join('-')}` : ''}`))))));
     }
     const sp = selSpan(), u = selUnit();

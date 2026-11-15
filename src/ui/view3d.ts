@@ -25,6 +25,10 @@ export interface View3DHost {
   setCursor?(p: Vec3): void;
   surfaces(): SceneSurface[];
   interacting?(): boolean;
+  /** When true, one finger paints on the surfaces (two fingers still turn, zoom and move). */
+  painting?(): boolean;
+  /** Paint stroke: the world point under the finger (null when off the surfaces). */
+  paint?(phase: 'start' | 'move' | 'end', p: Vec3 | null): void;
 }
 
 /** Look and cut, shared by every 3D view so a thumbnail matches the big view. */
@@ -43,7 +47,7 @@ export class View3D {
   private moving = false;
   private refineTimer = 0;
   private pointers = new Map<number, { x: number; y: number }>();
-  private g: null | { kind: 'one' | 'two'; x0: number; y0: number; last: [number, number]; moved: boolean; dist: number; mid: [number, number]; cam: Camera } = null;
+  private g: null | { kind: 'one' | 'two' | 'paint'; x0: number; y0: number; last: [number, number]; moved: boolean; dist: number; mid: [number, number]; cam: Camera } = null;
   private dbl = new DoubleTap();
   private ro: ResizeObserver;
   private bar: HTMLElement | null = null;
@@ -170,6 +174,12 @@ export class View3D {
       el.setPointerCapture(e.pointerId);
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       const cam = { ...this.cam, target: [...this.cam.target] as Vec3 };
+      if (this.pointers.size === 1 && this.host.painting?.() && this.host.paint) {
+        this.g = { kind: 'paint', x0: e.clientX, y0: e.clientY, last: [e.clientX, e.clientY], moved: true, dist: 0, mid: [0, 0], cam };
+        this.host.paint('start', this.surfaceAt(e.clientX, e.clientY));
+        return;
+      }
+      if (this.pointers.size === 2 && this.g?.kind === 'paint') this.host.paint?.('end', null);
       if (this.pointers.size === 1) this.g = { kind: 'one', x0: e.clientX, y0: e.clientY, last: [e.clientX, e.clientY], moved: false, dist: 0, mid: [0, 0], cam };
       else if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()];
@@ -189,6 +199,12 @@ export class View3D {
         this.moving = true; this.invalidate(); this.draw();
         return;
       }
+      if (g.kind === 'paint') {
+        if (this.pointers.size !== 1) return;
+        this.paintQ = [e.clientX, e.clientY];
+        if (!this.paintRaf) this.paintRaf = requestAnimationFrame(() => { this.paintRaf = 0; const q = this.paintQ; if (q && this.g?.kind === 'paint') this.host.paint?.('move', this.surfaceAt(q[0], q[1])); });
+        return;
+      }
       if (g.kind !== 'one') return;
       if (!g.moved && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 8) return;
       g.moved = true;
@@ -198,6 +214,11 @@ export class View3D {
     });
     const end = (e: PointerEvent) => {
       const g = this.g;
+      if (g?.kind === 'paint') {
+        this.pointers.delete(e.pointerId);
+        if (!this.pointers.size) { this.g = null; this.host.paint?.('end', null); }
+        return;
+      }
       if (g && g.kind === 'one' && !g.moved && this.pointers.size === 1) {
         if (this.dbl.tap(e.clientX, e.clientY)) {
           if (this.o.onDoubleTap) this.o.onDoubleTap(); else { this.resetView(); this.draw(); }
@@ -210,7 +231,7 @@ export class View3D {
       }
     };
     el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', (e) => { this.pointers.delete(e.pointerId); this.g = null; if (this.moving) { this.moving = false; this.invalidate(); this.draw(); } });
+    el.addEventListener('pointercancel', (e) => { this.pointers.delete(e.pointerId); if (this.g?.kind === 'paint') this.host.paint?.('end', null); this.g = null; if (this.moving) { this.moving = false; this.invalidate(); this.draw(); } });
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
       this.cam = { ...this.cam, dist: Math.max(20, Math.min(2000, this.cam.dist * (e.deltaY > 0 ? 1.1 : 1 / 1.1))) };
@@ -226,6 +247,15 @@ export class View3D {
     const right: Vec3 = [cy, sy, 0];
     const up: Vec3 = [-sy * sp, cy * sp, cp];
     return [0, 1, 2].map((i) => c.target[i] - right[i] * dx * mmPerPx + up[i] * dy * mmPerPx) as Vec3;
+  }
+
+  private paintQ: [number, number] | null = null;
+  private paintRaf = 0;
+  /** World point on the surfaces under a screen point (no volume). */
+  private surfaceAt(cx: number, cy: number): Vec3 | null {
+    const r = this.el.getBoundingClientRect();
+    const o = this.opts(false);
+    return getEngine().pick({ ...o, width: o.cssW, height: o.cssH, volume: false }, cx - r.left, cy - r.top, this.host.pickSurface);
   }
 
   private pick(cx: number, cy: number): void {

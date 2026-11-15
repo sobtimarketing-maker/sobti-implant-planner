@@ -67,41 +67,79 @@ export function selectTooth(m: TriMesh, pick: ToothPick, isTooth?: (i: number) =
   return sel;
 }
 
+/** Triangles that touch a selected vertex are dropped. Vertex numbers stay the same (unused ones remain until a fill or `compact`). */
+export function cutOut(m: TriMesh, sel: Uint8Array): TriMesh {
+  const I = m.indices, kept: number[] = [];
+  for (let t = 0; t < I.length; t += 3) if (!(sel[I[t]] || sel[I[t + 1]] || sel[I[t + 2]])) kept.push(I[t], I[t + 1], I[t + 2]);
+  return { positions: m.positions, indices: new Uint32Array(kept) };
+}
+
+export interface HoleLoop { loop: number[]; perimeter: number; centre: Vec3 }
+
 /**
- * Cut the selected vertices out and close each hole with a gently sagging gum
- * surface. The patch and a band of gum around it (`band` rings) are smoothed
- * so the rim has no steps or spikes; vertices `fixed` accepts (the
- * neighbouring teeth) never move.
+ * Open edges chained into loops (each walked against its triangles, so a fill
+ * faces the same way as the surface). The scan's own outer edge is one of them.
  */
-export function removeAndFill(m: TriMesh, sel: Uint8Array, o: Vec3, sag = 0.4, fixed?: (i: number) => boolean, band = 3): TriMesh {
-  const P = m.positions, I = m.indices;
-  const kept: number[] = [], removedEdges = new Map<string, [number, number]>();
-  const ek = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
-  for (let t = 0; t < I.length; t += 3) {
-    const a = I[t], b = I[t + 1], c = I[t + 2];
-    if (sel[a] || sel[b] || sel[c]) {
-      for (const [x, y] of [[a, b], [b, c], [c, a]]) removedEdges.set(ek(x, y), [x, y]);
-    } else kept.push(a, b, c);
-  }
-  // Hole rim: edges of kept triangles that a removed triangle also used.
-  // Walk them in the kept triangles' direction, reversed, so the fill faces the same way.
+export function holeLoops(m: TriMesh): HoleLoop[] {
+  const I = m.indices, P = m.positions, count = new Map<number, number>();
+  const nv = P.length / 3, key = (a: number, b: number) => (a < b ? a * nv + b : b * nv + a);
+  for (let t = 0; t < I.length; t += 3) for (let e = 0; e < 3; e++) { const k = key(I[t + e], I[t + (e + 1) % 3]); count.set(k, (count.get(k) ?? 0) + 1); }
   const next = new Map<number, number>();
-  for (let t = 0; t < kept.length; t += 3) {
-    const tri = [kept[t], kept[t + 1], kept[t + 2]];
-    for (let e = 0; e < 3; e++) {
-      const x = tri[e], y = tri[(e + 1) % 3];
-      if (removedEdges.has(ek(x, y))) next.set(y, x);
-    }
+  for (let t = 0; t < I.length; t += 3) for (let e = 0; e < 3; e++) {
+    const x = I[t + e], y = I[t + (e + 1) % 3];
+    if (count.get(key(x, y)) === 1) next.set(y, x);
   }
-  const loops: number[][] = [], seen = new Set<number>();
+  const out: HoleLoop[] = [], seen = new Set<number>();
   for (const s0 of next.keys()) {
     if (seen.has(s0)) continue;
     const loop: number[] = [];
     let v: number | undefined = s0;
     while (v !== undefined && !seen.has(v)) { seen.add(v); loop.push(v); v = next.get(v); }
-    if (v === s0 && loop.length >= 3) loops.push(loop);
+    if (v !== s0 || loop.length < 3) continue;
+    let per = 0; const c: Vec3 = [0, 0, 0];
+    for (let i = 0; i < loop.length; i++) {
+      const a = loop[i] * 3, b = loop[(i + 1) % loop.length] * 3;
+      per += Math.hypot(P[a] - P[b], P[a + 1] - P[b + 1], P[a + 2] - P[b + 2]);
+      c[0] += P[a] / loop.length; c[1] += P[a + 1] / loop.length; c[2] += P[a + 2] / loop.length;
+    }
+    out.push({ loop, perimeter: per, centre: c });
   }
-  const pos = Array.from(P), idx = kept.slice();
+  return out.sort((a, b) => b.perimeter - a.perimeter);
+}
+
+export interface FillOptions {
+  /** Dip in the middle of the patch (mm), as a healed socket. */
+  sag?: number;
+  /** Vertices that must not move (e.g. the neighbouring teeth). */
+  fixed?: (i: number) => boolean;
+  /** Rings of surface around the hole that are smoothed with the patch. */
+  band?: number;
+}
+
+/** Cut the selected vertices out and close each hole with a gently sagging gum surface. */
+export function removeAndFill(m: TriMesh, sel: Uint8Array, o: Vec3, sag = 0.4, fixed?: (i: number) => boolean, band = 3): TriMesh {
+  const cut = cutOut(m, sel);
+  // Only the holes this cut made: loops that run along a dropped triangle.
+  const I = m.indices, rim = new Set<number>();
+  for (let t = 0; t < I.length; t += 3) if (sel[I[t]] || sel[I[t + 1]] || sel[I[t + 2]]) for (let e = 0; e < 3; e++) if (!sel[I[t + e]]) rim.add(I[t + e]);
+  const loops = holeLoops(cut).filter((h) => h.loop.some((v) => rim.has(v)));
+  // The scan's outer edge can touch a cut near the border: never fill the largest loop of the scan.
+  const outer = holeLoops(m)[0];
+  const skip = outer ? new Set(outer.loop) : new Set<number>();
+  return fillHoles(cut, loops.filter((h) => !(h.loop.filter((v) => skip.has(v)).length > h.loop.length / 2)).map((h) => h.loop), o, { sag, fixed, band });
+}
+
+/**
+ * Close the given loops: rings from the rim towards the middle, the middle at
+ * the low (gum) level of the rim, inner rings following an ever smoother
+ * outline; then the patch heights and a band of surface around it are
+ * smoothed. Returns a compact mesh.
+ */
+export function fillHoles(m: TriMesh, loops: number[][], o: Vec3, opt: FillOptions = {}): TriMesh {
+  const sag = opt.sag ?? 0.4, fixed = opt.fixed, band = opt.band ?? 3;
+  const P = m.positions;
+  const kept = Array.from(m.indices);
+  const pos = Array.from(P), idx = kept;
   const nOrig = P.length / 3, fillR = new Map<number, number>();
   const rimSet = new Set<number>();
   const H = (i: number) => pos[i * 3] * o[0] + pos[i * 3 + 1] * o[1] + pos[i * 3 + 2] * o[2];
@@ -160,7 +198,19 @@ export function removeAndFill(m: TriMesh, sel: Uint8Array, o: Vec3, sag = 0.4, f
       const vx = pos[d] - pos[a], vy = pos[d + 1] - pos[a + 1], vz = pos[d + 2] - pos[a + 2];
       sx += uy * vz - uz * vy; sy += uz * vx - ux * vz; sz += ux * vy - uy * vx;
     }
-    if (sx * o[0] + sy * o[1] + sz * o[2] < 0) for (let t = 0; t < tris.length; t += 3) { const x = tris[t + 1]; tris[t + 1] = tris[t + 2]; tris[t + 2] = x; }
+    // Face the same way as the surface around the hole (its faces at the rim); the
+    // opposing-jaw direction only decides when there is no surface to go by.
+    const loopSet = new Set(loop);
+    let rx2 = 0, ry2 = 0, rz2 = 0;
+    for (let t = 0; t < kept.length; t += 3) {
+      if (!loopSet.has(kept[t]) && !loopSet.has(kept[t + 1]) && !loopSet.has(kept[t + 2])) continue;
+      const a = kept[t] * 3, b = kept[t + 1] * 3, d = kept[t + 2] * 3;
+      const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+      const vx = pos[d] - pos[a], vy = pos[d + 1] - pos[a + 1], vz = pos[d + 2] - pos[a + 2];
+      rx2 += uy * vz - uz * vy; ry2 += uz * vx - ux * vz; rz2 += ux * vy - uy * vx;
+    }
+    const ref: Vec3 = Math.hypot(rx2, ry2, rz2) > 1e-9 ? [rx2, ry2, rz2] : o;
+    if (sx * ref[0] + sy * ref[1] + sz * ref[2] < 0) for (let t = 0; t < tris.length; t += 3) { const x = tris[t + 1]; tris[t + 1] = tris[t + 2]; tris[t + 2] = x; }
     idx.push(...tris);
   }
   // Smooth the patch and the gum around the rim (not the neighbouring teeth).
