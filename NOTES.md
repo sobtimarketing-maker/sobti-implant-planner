@@ -134,3 +134,11 @@ Dr asked for a general smoothing / sculpt tool instead of only virtual extractio
 - Entry: Design crowns → "Edit the scan (smooth, cut, take a tooth out)". The old extraction list / put back is gone (Start again from the original replaces it).
 - Headless e2e (software GL): ~50 ms per brush move incl. re-upload of the 300K-face mesh; a tablet GPU should be faster. If strokes feel slow on the tablet, next step is partial buffer updates.
 - 6d fix (Dr: "scan is not moving" while editing): editor now has "Turn the scan / Use the tool" switch (one finger turns in Turn mode); picking a tool switches back. Painting starts only after 6 px movement or 140 ms, so a second finger arriving cancels cleanly with no mark; a quick tap still dabs. Two-finger twist now also turns (yaw) in every 3D view.
+
+### Session 6e: crown libraries (real-looking crowns)
+Dr asked for a few generic crown libraries with anatomically real crowns.
+- `core/crown/anatomy.ts`: own parametric anatomy per FDI tooth: upper molars (rhomboid, 4 cusps, oblique ridge), lower first molar (5 cusps, Y grooves), lower second/third (4 cusps, cross grooves), upper premolars (2 cusps), lower first premolar (big buccal, small lingual), lower second (3 cusps), canines (pentagon, mesial slope shorter, lingual ridge), incisors (incisal edge, rounded distal corner, lingual fossa, marginal ridges, cingulum, labial lobes). Cusps = rounded cones + triangular ridges joined with a smooth max (V-shaped valleys), fissures and pits, marginal ridges, buccal lobes on the walls, cervical scallop, contact areas at the right heights. Wall/cap junction relaxed so there is no lid-like edge.
+- Libraries: Natural, Youthful (tall sharp cusps, deep grooves, mamelons), Mature (worn facets, squarer), Implant (flat cusps, 12 % narrower table). VITA shades B1, A1, A2, A3, A3.5 as vertex colours (cervical chroma, translucent incisal edge, fissure stain).
+- Engine: `SceneSurface.material = 'enamel'` (wrapped key light, gloss, bluish rim). Crowns use it; bite colours unchanged (now off by default).
+- Design crowns panel: Crown library (2×2 buttons + help) and Shade swatches; the last choice is the default for new crowns (`prosthetic.library/shade`). Changing library re-fits the height to the bite.
+- `tools/crownGallery.ts`: dev-only gallery of every tooth in every library (esbuild it and open in a browser).

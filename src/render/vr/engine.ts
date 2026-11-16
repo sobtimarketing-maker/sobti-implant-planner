@@ -26,6 +26,8 @@ export interface SceneSurface {
   model?: ArrayLike<number>;
   /** Use the mesh's own vertex colours (e.g. a distance map) instead of color. */
   vertexColors?: boolean;
+  /** Surface look: 'enamel' adds a key light, gloss and translucent edges (crowns). */
+  material?: 'enamel';
 }
 
 export interface Camera { target: Vec3; yaw: number; pitch: number; dist: number; fov: number }
@@ -157,7 +159,7 @@ void main() {
 const FS_MESH = `#version 300 es
 precision highp float;
 in vec3 vN; in vec3 vW; in vec3 vC;
-uniform vec3 uColor; uniform vec3 uEye; uniform vec4 uClip; uniform int uClipOn; uniform int uUseCol;
+uniform vec3 uColor; uniform vec3 uEye; uniform vec4 uClip; uniform int uClipOn; uniform int uUseCol; uniform int uMat; uniform vec3 uLight;
 out vec4 outColor;
 void main() {
   if (uClipOn == 1 && dot(uClip.xyz, vW) + uClip.w > 0.0) discard;
@@ -165,6 +167,19 @@ void main() {
   vec3 v = normalize(uEye - vW);
   float d = abs(dot(n, v));
   vec3 base = uUseCol == 1 ? vC : uColor;
+  if (uMat == 1) {
+    // Enamel: soft wrapped key light (light passes into the tooth), sharp gloss,
+    // bluish translucent rim, warm fill from the viewer.
+    if (dot(n, v) < 0.0) n = -n;
+    vec3 L = normalize(uLight);
+    float wrap = max(0.0, (dot(n, L) + 0.4) / 1.4);
+    float hv = max(0.0, dot(n, normalize(L + v)));
+    float spec = pow(hv, 80.0) * 0.5 + pow(hv, 14.0) * 0.07;
+    float fres = pow(1.0 - d, 3.0);
+    vec3 col = base * (0.2 + 0.55 * wrap + 0.22 * d) + base * vec3(1.0, 0.9, 0.78) * 0.06 + spec + vec3(0.7, 0.78, 0.88) * fres * 0.2;
+    outColor = vec4(col, 1.0);
+    return;
+  }
   outColor = vec4(base * (0.3 + 0.7 * d) + pow(d, 30.0) * 0.25, 1.0);
 }`;
 
@@ -396,6 +411,12 @@ export class Engine3D {
     gl.useProgram(mp);
     gl.uniformMatrix4fv(this.u(mp, 'uVP'), false, vp);
     gl.uniform3fv(this.u(mp, 'uEye'), eye);
+    {
+      const { up } = cameraEye(o.camera);
+      const t = o.camera.target, vd = [eye[0] - t[0], eye[1] - t[1], eye[2] - t[2]], vl = Math.hypot(vd[0], vd[1], vd[2]) || 1;
+      const f = [vd[0] / vl, vd[1] / vl, vd[2] / vl], r = [up[1] * f[2] - up[2] * f[1], up[2] * f[0] - up[0] * f[2], up[0] * f[1] - up[1] * f[0]];
+      gl.uniform3fv(this.u(mp, 'uLight'), [f[0] * 0.75 + up[0] * 0.55 - r[0] * 0.35, f[1] * 0.75 + up[1] * 0.55 - r[1] * 0.35, f[2] * 0.75 + up[2] * 0.55 - r[2] * 0.35]);
+    }
     gl.uniform1i(this.u(mp, 'uClipOn'), clip ? 1 : 0);
     gl.uniform4fv(this.u(mp, 'uClip'), clip ?? [0, 0, 0, 0]);
     for (const s of o.surfaces) {
@@ -405,6 +426,7 @@ export class Engine3D {
       gl.uniform4fv(this.u(mp, 'uAt'), s.at ?? [0, 0, 0, 1]);
       gl.uniformMatrix4fv(this.u(mp, 'uModel'), false, s.model ? Float32Array.from(s.model) : IDENTITY4);
       gl.uniform1i(this.u(mp, 'uUseCol'), s.vertexColors ? 1 : 0);
+      gl.uniform1i(this.u(mp, 'uMat'), s.material === 'enamel' ? 1 : 0);
       gl.bindVertexArray(g.vao);
       gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
     }

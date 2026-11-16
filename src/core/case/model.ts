@@ -1,5 +1,6 @@
 // Versioned case schema. Everything about a case lives here (spec step 1);
 // the working volume is cached separately and never embedded.
+import type { LibraryId, ShadeId } from '../crown/anatomy';
 import type { StudyMeta } from '../volume/series';
 import type { Tier } from '../volume/budget';
 import type { Vec3 } from '../volume/volume';
@@ -94,7 +95,8 @@ export interface CaseRecord {
   /** Mouth scans (meshes are stored separately) and their fit to the CBCT. */
   scans?: CaseScans;
   /** Crown-down design: single crowns and bridges, in world LPS mm (see core/crown/crown.ts). */
-  prosthetic?: { spans: CrownSpan[] };
+  /** Crowns; library / shade are the defaults for new crowns. */
+  prosthetic?: { spans: CrownSpan[]; library?: LibraryId; shade?: ShadeId };
 }
 
 import type { CrownSpan } from '../crown/crown';

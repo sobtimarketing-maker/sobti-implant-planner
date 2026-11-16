@@ -8,6 +8,7 @@
 import type { Vec3 } from '../volume/volume';
 import type { TriMesh } from '../mesh/mesh';
 import { rayMesh } from '../mesh/raycast';
+import { anatomicCrown, AnatomicCrown, LibraryId, ShadeId } from './anatomy';
 
 export type ToothKind = 'molar' | 'premolar' | 'canine' | 'incisor';
 export const KIND_LABEL: Record<ToothKind, string> = { molar: 'Molar', premolar: 'Premolar', canine: 'Canine', incisor: 'Incisor' };
@@ -48,87 +49,19 @@ export interface CrownSpan {
   bite: number;
   /** Grind the crown down where it would push into the opposing teeth. */
   adapt: boolean;
+  /** Crown library (shape style) and VITA shade; defaults natural / A2. */
+  library?: LibraryId;
+  shade?: ShadeId;
   units: CrownUnit[];
 }
 
-// ---------- shape template
-interface Shape { n: number; cervMD: number; topMD: number; peakMD: number; cervBL: number; topBL: number; peakBL: number; cusp: number }
-const SHAPES: Record<ToothKind, Shape> = {
-  molar: { n: 2.8, cervMD: 0.74, topMD: 0.9, peakMD: 0.72, cervBL: 0.8, topBL: 0.8, peakBL: 0.35, cusp: 0.28 },
-  premolar: { n: 2.3, cervMD: 0.7, topMD: 0.84, peakMD: 0.72, cervBL: 0.8, topBL: 0.76, peakBL: 0.35, cusp: 0.26 },
-  canine: { n: 2.0, cervMD: 0.7, topMD: 0.55, peakMD: 0.7, cervBL: 0.8, topBL: 0.55, peakBL: 0.3, cusp: 0.3 },
-  incisor: { n: 2.4, cervMD: 0.72, topMD: 1.0, peakMD: 0.8, cervBL: 0.85, topBL: 0.3, peakBL: 0.25, cusp: 0.04 },
-};
-const NS = 72, NR = 14, NC = 16;
-
-function profile(t: number, cerv: number, top: number, peak: number): number {
-  if (t <= peak) return cerv + (1 - cerv) * Math.sin((t / peak) * Math.PI / 2);
-  const s = (t - peak) / (1 - peak);
-  return 1 - (1 - top) * s * s;
-}
-const g2 = (du: number, dv: number, su: number, sv: number) => Math.exp(-(du * du) / (2 * su * su) - (dv * dv) / (2 * sv * sv));
-/** Occlusal relief above the marginal ridge, as a share of the cusp height. u: mesial-distal, v: + towards the cheek. */
-function relief(kind: ToothKind, u: number, v: number): number {
-  switch (kind) {
-    case 'molar':
-      // Four main cusps, a small distal one, central groove and fossa, marginal ridges.
-      return g2(u + 0.5, v - 0.48, 0.28, 0.3) + 0.95 * g2(u - 0.5, v - 0.48, 0.28, 0.3) + 0.9 * g2(u + 0.5, v + 0.48, 0.28, 0.3) + 0.85 * g2(u - 0.5, v + 0.48, 0.28, 0.3)
-        + 0.55 * g2(u - 0.85, v - 0.1, 0.16, 0.25)
-        + 0.35 * g2(u + 0.88, v, 0.1, 0.5) + 0.3 * g2(u - 0.95, v, 0.08, 0.5)
-        - 0.55 * g2(u, v, 0.9, 0.11) - 0.4 * g2(u, v, 0.22, 0.22) - 0.3 * g2(u, v - 0.6, 0.08, 0.35) - 0.25;
-    case 'premolar':
-      return g2(u, v - 0.48, 0.4, 0.3) + 0.72 * g2(u, v + 0.5, 0.4, 0.3)
-        + 0.3 * g2(u + 0.85, v, 0.1, 0.5) + 0.3 * g2(u - 0.85, v, 0.1, 0.5)
-        - 0.5 * g2(u, v, 0.75, 0.12) - 0.2;
-    case 'canine':
-      return g2(u, v - 0.1, 0.38, 0.55) - 0.1;
-    default:
-      return 1 - 0.3 * u * u;
-  }
+// ---------- shape template (anatomic library in anatomy.ts)
+const KIND_FDI: Record<ToothKind, number> = { molar: 46, premolar: 45, canine: 43, incisor: 41 };
+/** Crown mesh in its own frame (see top of file), for a tooth number or kind. */
+export function crownTemplate(tooth: ToothKind | number, md: number, bl: number, height: number, buccal: 1 | -1, library?: string, shade?: ShadeId): AnatomicCrown {
+  return anatomicCrown(typeof tooth === 'number' ? tooth : KIND_FDI[tooth], md, bl, height, buccal, library, shade);
 }
 
-/** Crown mesh in its own frame (see top of file). */
-export function crownTemplate(kind: ToothKind, md: number, bl: number, height: number, buccal: 1 | -1): TriMesh {
-  const S = SHAPES[kind];
-  const cuspH = height * S.cusp, wallH = height - cuspH;
-  const pos: number[] = [], idx: number[] = [];
-  const ring = (fMD: number, fBL: number, z: number) => {
-    for (let i = 0; i < NS; i++) {
-      const th = (i / NS) * Math.PI * 2, c = Math.cos(th), s = Math.sin(th);
-      pos.push((md / 2) * fMD * Math.sign(c) * Math.abs(c) ** (2 / S.n), (bl / 2) * fBL * Math.sign(s) * Math.abs(s) ** (2 / S.n), z);
-    }
-  };
-  // Side wall rings, gum to marginal ridge.
-  for (let k = 0; k <= NR; k++) {
-    const t = k / NR;
-    ring(profile(t, S.cervMD, S.topMD, S.peakMD), profile(t, S.cervBL, S.topBL, S.peakBL), t * wallH);
-  }
-  const top = NR * NS;
-  // Occlusal cap: rings shrinking to the centre, raised by the relief.
-  for (let k = 1; k < NC; k++) {
-    const rr = 1 - k / NC, edge = Math.min(1, (1 - rr) / 0.3), e = edge * edge * (3 - 2 * edge);
-    for (let i = 0; i < NS; i++) {
-      const x = pos[(top + i) * 3] * rr, y = pos[(top + i) * 3 + 1] * rr;
-      const u = x / ((md / 2) * S.topMD), v = (y / ((bl / 2) * S.topBL)) * buccal;
-      pos.push(x, y, wallH + cuspH * e * relief(kind, u, v));
-    }
-  }
-  const capC = pos.length / 3;
-  pos.push(0, 0, wallH + cuspH * relief(kind, 0, 0));
-  const botC = pos.length / 3;
-  pos.push(0, 0, 0);
-  const quad = (a: number, b: number, c: number, d: number) => idx.push(a, b, c, a, c, d);
-  for (let k = 0; k < NR + NC - 1; k++) for (let i = 0; i < NS; i++) {
-    const j = (i + 1) % NS, r0 = k * NS, r1 = (k + 1) * NS;
-    if (k < NR) quad(r0 + i, r0 + j, r1 + j, r1 + i);
-    else quad(r0 + i, r0 + j, r1 + j, r1 + i); // cap rings: same winding keeps the top facing out
-  }
-  const last = (NR + NC - 1) * NS;
-  for (let i = 0; i < NS; i++) { const j = (i + 1) % NS; idx.push(last + i, last + j, capC); idx.push(botC, j, i); }
-  return { positions: new Float32Array(pos), indices: new Uint32Array(idx) };
-}
-
-// ---------- placement
 const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const mulS = (a: Vec3, s: number): Vec3 => [a[0] * s, a[1] * s, a[2] * s];
@@ -274,11 +207,11 @@ export function seatOnGum(span: CrownSpan, gum: Hit): void {
   });
 }
 
-export interface BuiltCrown { mesh: TriMesh; /** Gap to the opposing teeth per vertex (mm), Infinity if none in reach. */ gap: Float32Array; contact: number; /** Most taken off any point to fit the bite (mm). */ ground: number }
+export interface BuiltCrown { mesh: TriMesh & { colors: Uint8Array }; /** Gap to the opposing teeth per vertex (mm), Infinity if none in reach. */ gap: Float32Array; contact: number; /** Most taken off any point to fit the bite (mm). */ ground: number }
 
 /** Crown in world mm, ground to the opposing teeth if the span says so. */
 export function buildUnit(span: CrownSpan, u: CrownUnit, opposing: Hit | null): BuiltCrown {
-  const t = crownTemplate(kindOf(u.fdi), u.md, u.bl, u.height, span.buccal);
+  const t = crownTemplate(u.fdi, u.md, u.bl, u.height, span.buccal, span.library, span.shade);
   const P = t.positions, n = P.length / 3, gap = new Float32Array(n).fill(Infinity);
   const W = new Float32Array(P.length);
   for (let i = 0; i < n; i++) { const w = toWorld(span, u, [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]]); W[i * 3] = w[0]; W[i * 3 + 1] = w[1]; W[i * 3 + 2] = w[2]; }
@@ -300,7 +233,7 @@ export function buildUnit(span: CrownSpan, u: CrownUnit, opposing: Hit | null): 
       if (g < contact) contact = g;
     }
   }
-  return { mesh: { positions: W, indices: t.indices }, gap, contact, ground };
+  return { mesh: { positions: W, indices: t.indices, colors: t.colors }, gap, contact, ground };
 }
 
 /**

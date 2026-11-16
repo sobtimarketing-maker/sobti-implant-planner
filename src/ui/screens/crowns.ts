@@ -24,6 +24,7 @@ import { getScan, putScan } from '../../core/store/db';
 import { toothGrow } from '../../core/segment/toothGrow';
 import { maskAt } from '../../core/segment/regionGrow';
 import { sampleWorld } from '../../render/oblique';
+import { LIBRARIES, libraryOf, SHADE_IDS, SHADES } from '../../core/crown/anatomy';
 
 type Arch = 'upper' | 'lower';
 type Pick = 'idle' | 'mesial' | 'distal' | 'edit';
@@ -43,7 +44,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
   let pick: Pick = pr.spans.length ? 'idle' : 'mesial';
   let pendingMesial: Vec3 | null = null;
   let sel: { span: string; unit: number } | null = pr.spans.length ? { span: pr.spans[0].id, unit: 0 } : null;
-  let showOpp = true, showCt = false, showBite = true;
+  let showOpp = true, showCt = false, showBite = false;
   let message = '';
   const save = () => onChange();
   const treating = (): Arch => sc?.treating ?? 'lower';
@@ -97,7 +98,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
 
   // ---------- crowns
   const built = new Map<string, BuiltCrown>();
-  const unitKey = (span: CrownSpan, i: number) => { const u = span.units[i]; return `crown:${span.id}:${i}:${[u.fdi, u.md, u.bl, u.height, u.turn, u.shiftM, u.shiftB, ...u.origin, span.bite, span.adapt ? 1 : 0, span.buccal].map((x) => (+x).toFixed(3)).join(',')}`; };
+  const unitKey = (span: CrownSpan, i: number) => { const u = span.units[i]; return `crown:${span.id}:${i}:${[u.fdi, u.md, u.bl, u.height, u.turn, u.shiftM, u.shiftB, ...u.origin, span.bite, span.adapt ? 1 : 0, span.buccal].map((x) => (+x).toFixed(3)).join(',')}:${span.library ?? 'natural'}:${span.shade ?? 'A2'}`; };
   function crown(span: CrownSpan, i: number): { key: string; b: BuiltCrown } {
     const key = unitKey(span, i);
     let b = built.get(key);
@@ -129,6 +130,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
   function placeSpan(mesial: Vec3, distal: Vec3) {
     const fdis = teethFor(mesial, distal);
     const span = newSpan(newId(), mesial, distal, fdis, occl, archCentre);
+    span.library = pr.library; span.shade = pr.shade;
     if (Math.sqrt(dist2(mesial, distal)) < 3) { message = 'The two points are too close. Tap the contact point on each neighbouring tooth.'; return; }
     fit(span, true);
     // Say so when planned teeth in this quadrant were left out (the gap was shorter than they need).
@@ -248,6 +250,9 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
 
   // ---------- scene
   const sphere = sphereMesh();
+  /** Selected crown: a light blue cast so it stands out but still looks like a tooth. */
+  const tints = new WeakMap<Uint8Array, Uint8Array>();
+  const selTint = (c: Uint8Array) => { let t = tints.get(c); if (!t) { t = new Uint8Array(c.length); for (let i = 0; i < c.length; i += 3) { t[i] = c[i] * 0.95; t[i + 1] = c[i + 1] * 0.98; t[i + 2] = Math.min(255, c[i + 2] * 1.03 + 6); } tints.set(c, t); } return t; };
   function surfaces(): SceneSurface[] {
     const out: SceneSurface[] = [];
     if (!geometry()) return out;
@@ -260,7 +265,7 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
       const { key, b } = crown(sp, i);
       const isSel = sel?.span === sp.id && sel.unit === i;
       if (showBite) out.push({ key: `${key}:bite`, color: [1, 1, 1], mesh: () => ({ ...b.mesh, colors: biteColors(b.gap, sp.bite) }), vertexColors: true });
-      else out.push({ key, color: isSel ? [1, 0.97, 0.86] : [0.94, 0.92, 0.86], mesh: () => b.mesh });
+      else out.push({ key: `${key}:${isSel ? 's' : 'n'}`, color: [1, 1, 1], mesh: () => isSel ? { ...b.mesh, colors: selTint(b.mesh.colors) } : b.mesh, vertexColors: true, material: 'enamel' });
     });
     const sel0 = selSpan();
     if (sel0 && pick === 'idle') for (const p of [sel0.mesial, sel0.distal]) out.push({ key: 'sphere', color: [0.36, 0.7, 1], mesh: () => sphere, at: [...p, 0.45] as [number, number, number, number] });
@@ -378,6 +383,21 @@ export function renderCrowns(s: AppState, c: CaseRecord, onChange: () => void): 
       body.push(h('div', { class: 'row-btns' },
         h('button', { class: 'btn secondary', onclick: () => { fit(sp); redraw(); } }, icon('reset', 16), 'Fit to bite again'),
         h('button', { class: `btn secondary${sp.adapt ? ' on' : ''}`, 'aria-pressed': String(sp.adapt), onclick: () => { sp.adapt = !sp.adapt; save(); redraw(); } }, sp.adapt ? 'Grinding to bite: on' : 'Grinding to bite: off')));
+      // Crown library (shape style) and shade, for the whole crown or bridge.
+      const lib = libraryOf(sp.library);
+      const setLook = (l?: string, sh?: string) => {
+        if (l) sp.library = pr.library = l as typeof sp.library;
+        if (sh) sp.shade = pr.shade = sh as typeof sp.shade;
+        if (l) fit(sp); save(); redraw();
+      };
+      body.push(h('h3', null, 'Crown library'),
+        h('div', { class: 'lib-grid', role: 'group', 'aria-label': 'Crown library' }, LIBRARIES.map((x) => h('button', { class: `tool-btn${x.id === lib.id ? ' on' : ''}`, 'aria-pressed': String(x.id === lib.id), onclick: () => setLook(x.id) }, x.label))),
+        h('p', { class: 'tool-help' }, lib.help),
+        h('div', { class: 'tune-row' }, h('span', { class: 'tune-label' }, 'Shade'),
+          h('div', { class: 'shade-row', role: 'group', 'aria-label': 'Shade' }, SHADE_IDS.map((id) => {
+            const c = SHADES[id].map((x) => Math.round(x * 255)).join(',');
+            return h('button', { class: `shade${(sp.shade ?? 'A2') === id ? ' on' : ''}`, 'aria-pressed': String((sp.shade ?? 'A2') === id), style: `--shade:rgb(${c})`, onclick: () => setLook(undefined, id) }, id);
+          }))));
       // Teeth in this span.
       const quad = Math.floor(sp.units[0].fdi / 10);
       body.push(h('details', { class: 'tech' }, h('summary', null, sp.units.length > 1 ? 'Bridge teeth' : 'Tooth number and bridge'),

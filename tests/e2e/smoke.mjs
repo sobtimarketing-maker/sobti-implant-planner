@@ -219,6 +219,19 @@ try {
       await page.getByRole('group', { name: 'Look from' }).getByRole('button', { name: 'Tongue' }).click();
       await page.waitForTimeout(1200);
       await shot(page, '17-crown-tongue.png');
+      // Crown library and shade.
+      await page.getByRole('button', { name: 'Bite', exact: true }).click().catch(() => {});
+      for (const lib of ['Youthful', 'Mature', 'Implant (flat cusps)', 'Natural']) {
+        const t0 = Date.now();
+        await page.getByRole('button', { name: lib, exact: true }).click();
+        await page.waitForTimeout(500);
+        console.log(`Library ${lib}: ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+        await shot(page, `17-lib-${lib.split(' ')[0].toLowerCase()}.png`);
+      }
+      await page.getByRole('button', { name: 'A1', exact: true }).click();
+      await page.locator('.lib-grid').scrollIntoViewIfNeeded();
+      await shot(page, '17-lib-panel.png');
+      await page.getByRole('button', { name: 'A2', exact: true }).click();
       // Scan editor: take a tooth out, smooth, build up, cut through, close holes, undo, save.
       await page.getByRole('button', { name: /Edit the scan/ }).click();
       await page.waitForTimeout(1500);
