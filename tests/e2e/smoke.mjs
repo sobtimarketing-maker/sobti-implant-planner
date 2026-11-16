@@ -16,7 +16,23 @@ const server = createServer(async (req, res) => {
 const url = `http://localhost:${server.address().port}/`;
 const shots = process.env.SHOTS;
 if (shots) await mkdir(shots, { recursive: true });
-const shot = async (page, name) => { if (shots) await page.screenshot({ path: join(shots, name) }); };
+const tour = process.env.TOUR; // also save each screen with its whole side panel showing, plus the panel's text
+const tourText = {};
+const shot = async (page, name) => {
+  if (!shots) return;
+  await page.screenshot({ path: join(shots, name) });
+  if (!tour) return;
+  const need = await page.evaluate(() => {
+    let h = document.documentElement.scrollHeight;
+    for (const el of document.querySelectorAll('.side-card, main, .intake, .scroll')) h = Math.max(h, el.scrollHeight + el.getBoundingClientRect().top + 60);
+    return Math.min(3000, Math.ceil(h));
+  });
+  const vp = page.viewportSize();
+  if (need > vp.height + 20) { await page.setViewportSize({ width: vp.width, height: need }); await page.waitForTimeout(600); }
+  await page.screenshot({ path: join(tour, name), fullPage: true });
+  tourText[name] = await page.evaluate(() => [...document.querySelectorAll('.side-card, main')].map((e) => e.innerText).join('\n----\n'));
+  if (need > vp.height + 20) { await page.setViewportSize(vp); await page.waitForTimeout(400); }
+};
 
 const browser = await chromium.launch({ args: ['--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--ignore-gpu-blocklist'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: Number(process.env.DPR ?? 1) });
@@ -301,6 +317,16 @@ try {
     await page.locator('.hero canvas').first().waitFor({ timeout: 20000 });
     console.log('Reopen from cache OK');
   }
+  if (tour) {
+    // Doctor and patient modes on the current screen.
+    for (const [mode, file] of [['Doctor', '23-mode-doctor.png'], ['Patient view', '24-mode-patient.png']]) {
+      await page.getByRole('button', { name: mode, exact: true }).click();
+      await page.waitForTimeout(800);
+      await shot(page, file);
+    }
+    await page.getByRole('button', { name: 'Staff', exact: true }).click();
+    await page.waitForTimeout(500);
+  }
   await page.getByRole('button', { name: 'Back to cases' }).click();
   await page.getByRole('button', { name: /Open case Test Patient/ }).waitFor();
   await shot(page, '5-home.png');
@@ -311,6 +337,7 @@ try {
   console.error('E2E smoke: FAIL', e.message, errors);
   process.exitCode = 1;
 } finally {
-  await browser.close();
+  if (tour) await (await import('node:fs/promises')).writeFile(join(tour, 'text.json'), JSON.stringify(tourText, null, 1));
+await browser.close();
   server.close();
 }
